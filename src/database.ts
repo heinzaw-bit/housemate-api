@@ -1,5 +1,7 @@
+import { rootCertificates } from 'node:tls';
 import type { PoolConfig } from 'pg';
 import type { Config } from './config.js';
+import { supabaseDatabaseCa } from './supabase-ca.js';
 
 export function databasePoolOptions(config: Config): PoolConfig {
   if (!config.serverless) {
@@ -15,6 +17,9 @@ export function databasePoolOptions(config: Config): PoolConfig {
     max: 1,
     connectionTimeoutMillis: 5_000,
     idleTimeoutMillis: 10_000,
-    ssl: { rejectUnauthorized: true, ca: config.databaseSslCa },
+    ssl: {
+      rejectUnauthorized: true,
+      ca: config.databaseSslCa ?? [...rootCertificates, supabaseDatabaseCa],
+    },
   };
 }

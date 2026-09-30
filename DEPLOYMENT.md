@@ -4,11 +4,13 @@ Deploy `heinzaw-bit/housemate-api` and `heinzaw-bit/housemate-app` as separate V
 
 ## 1. Prepare private configuration
 
-From the API directory, run `npm run cron:secret`. It adds a random 32-byte URL-safe secret to ignored `.env`, or retains an existing value. Open `.env` locally and copy CRON_SECRET privately to Vercel and your scheduler. Never commit it, send it in a URL/query, or add it to a NEXT_PUBLIC variable.
+The current workspace has a prepared, ignored `.env.vercel` containing the verified transaction-pooler URI, existing Supabase URL/publishable key, and generated CRON_SECRET. Open it locally and copy the values privately into the API project's Vercel environment variables (without enclosing quotes if entering individual values). Replace its WEB_ORIGINS placeholder with the intended/actual web production origin. Keep this file private; it is deliberately absent from GitHub. Local `.env` remains intact.
+
+For a fresh clone, from the API directory run `npm run cron:secret`. It adds a random 32-byte URL-safe secret to ignored `.env`, or retains an existing value. Copy CRON_SECRET privately to Vercel and your scheduler. Never commit it, send it in a URL/query, or add it to a NEXT_PUBLIC variable.
 
 Open the existing Supabase project, choose **Connect → Transaction pooler**, and copy the PostgreSQL URI with the correct database password. Use the dashboard's actual pooler host and username; port 6543 is transaction mode. URL-encode special characters in the password. The existing project's migrations 001–015 are already applied. Do not rerun them as part of an import/build/request.
 
-Vercel database connections verify the server certificate and hostname. If your pooler requires a custom CA, copy the trusted certificate PEM from Supabase into server-only `DATABASE_SSL_CA`. Do not disable TLS verification to bypass a certificate error. Use the transaction pooler with the existing unnamed node-postgres queries; no named prepared statements are configured.
+Vercel database connections verify the server certificate and hostname. The user supplied the public Supabase `prod-ca-2021.crt`, which is bundled in `src/supabase-ca.ts` together with standard trusted roots. Certificate-validated read-only connectivity to `aws-0-ap-south-1.pooler.supabase.com:6543` and the existing reminder function were verified using the prepared private settings. No extra CA environment variable is needed for this pooler. For a future/custom host, `DATABASE_SSL_CA` may override the trust bundle with its trusted PEM. Do not disable TLS verification to bypass a certificate error. Use the transaction pooler with the existing unnamed node-postgres queries; no named prepared statements are configured.
 
 ## 2. Import the API
 

@@ -48,7 +48,20 @@ test('serverless pool verifies TLS even when URL options request insecure SSL', 
   assert.equal(options.connectionTimeoutMillis, 5000);
   // Check the actual pg client parsing too: URL SSL flags must not override TLS.
   const client = new pg.Client(options);
-  assert.deepEqual(client.ssl, { rejectUnauthorized: true, ca: undefined });
+  assert.equal(typeof client.ssl, 'object');
+  // @types/pg declares this as boolean, but pg retains the configured TLS object.
+  const tls = client.ssl as unknown as {
+    rejectUnauthorized: boolean;
+    ca: string[];
+  };
+  assert.equal(tls.rejectUnauthorized, true);
+  assert.ok(
+    tls.ca.some((certificate) => certificate.includes('BEGIN CERTIFICATE')),
+  );
+  assert.deepEqual(
+    databasePoolOptions({ ...config, databaseSslCa: 'custom-trusted-ca' }).ssl,
+    { rejectUnauthorized: true, ca: 'custom-trusted-ca' },
+  );
   assert.equal(databasePoolOptions(loadConfig(env)).max, 10);
 });
 
