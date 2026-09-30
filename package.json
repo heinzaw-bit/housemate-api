@@ -1,0 +1,57 @@
+{
+  "name": "housemate-api",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "npm run build && node --env-file=.env dist/main.js",
+    "migrate:expenses": "node --env-file=.env scripts/apply-expenses-migration.mjs",
+    "migrate:bills": "node --env-file=.env scripts/apply-bills-migration.mjs",
+    "migrate:settlements": "node --env-file=.env scripts/apply-settlements-migration.mjs",
+    "migrate:edits": "node --env-file=.env scripts/apply-financial-edits-migration.mjs",
+    "migrate:voids": "node --env-file=.env scripts/apply-financial-voids-migration.mjs",
+    "migrate:meals": "node --env-file=.env scripts/apply-meals-migration.mjs",
+    "migrate:shopping": "node --env-file=.env scripts/apply-shopping-migration.mjs",
+    "migrate:shopping-currency": "node --env-file=.env scripts/apply-shopping-currency-migration.mjs",
+    "migrate:chores": "node --env-file=.env scripts/apply-chores-migration.mjs",
+    "migrate:events": "node --env-file=.env scripts/apply-events-migration.mjs",
+    "migrate:announcements-polls": "node --env-file=.env scripts/apply-announcements-polls-migration.mjs",
+    "migrate:notifications": "node --env-file=.env scripts/apply-notifications-migration.mjs",
+    "push:keys": "node scripts/generate-push-keys.mjs",
+    "smoke:notifications": "npm run build && node --env-file=.env scripts/smoke-notifications.mjs",
+    "smoke:dashboard": "npm run build && node --env-file=.env scripts/smoke-dashboard.mjs",
+    "smoke:meals": "npm run build && node --env-file=.env scripts/smoke-meals.mjs",
+    "smoke:shopping": "npm run build && node --env-file=.env scripts/smoke-shopping.mjs",
+    "smoke:chores": "npm run build && node --env-file=.env scripts/smoke-chores.mjs",
+    "smoke:events": "npm run build && node --env-file=.env scripts/smoke-events.mjs",
+    "smoke:announcements-polls": "npm run build && node --env-file=.env scripts/smoke-announcements-polls.mjs",
+    "smoke:house-actions": "npm run build && node --env-file=.env scripts/smoke-house-actions.mjs",
+    "smoke:bills": "npm run build && node --env-file=.env scripts/smoke-bills.mjs",
+    "smoke:settlements": "npm run build && node --env-file=.env scripts/smoke-settlements.mjs",
+    "smoke:edits": "npm run build && node --env-file=.env scripts/smoke-financial-edits.mjs",
+    "smoke:voids": "npm run build && node --env-file=.env scripts/smoke-financial-voids.mjs",
+    "smoke:expenses": "npm run build && node --env-file=.env scripts/smoke-expenses.mjs",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check src tests",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/*.test.js"
+  },
+  "type": "module",
+  "dependencies": {
+    "@fastify/cors": "11.3.0",
+    "fastify": "5.12.5",
+    "pg": "8.23.0",
+    "web-push": "3.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "26.6.3",
+    "@types/pg": "8.23.1",
+    "@types/web-push": "3.6.4",
+    "supabase": "2.118.0",
+    "typescript": "7.0.2"
+  }
+}

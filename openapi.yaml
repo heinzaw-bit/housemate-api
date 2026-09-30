@@ -1,0 +1,2893 @@
+openapi: 3.1.0
+info:
+  title: HouseMate API
+  version: 0.1.0
+  description: Household identity, membership, money, daily life, events, announcements, polls, personal notifications, preferences, and web push API for web and mobile clients.
+servers:
+  - url: http://localhost:3001
+security:
+  - bearerAuth: []
+paths:
+  /v1/households/{id}/notifications:
+    get:
+      summary: Read the caller's personal notification feed
+      description: Active membership required. Newest first with a stable cursor. Only the caller's in-app notifications are returned, including previously read history. No private response is cached.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - { in: query, name: scope, schema: { type: string, enum: [all, unread], default: all } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { in: query, name: cursor, schema: { type: string, maxLength: 500 } }
+      responses:
+        '200':
+          description: Personal feed and total unread count
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/notifications/{notificationId}/read:
+    put:
+      summary: Mark the caller's notification read idempotently
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - { in: path, name: notificationId, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Read timestamp retained on repeat requests }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/notifications/read-all:
+    post:
+      summary: Mark all the caller's notifications through the displayed newest item read
+      description: The boundary must belong to the caller in this household. Entries chronologically newer than that item stay unread.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [throughId], additionalProperties: false, properties: { throughId: { type: string, format: uuid } } }
+      responses:
+        '204': { description: Existing items marked read }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/notification-preferences:
+    get:
+      summary: Read the caller's notification preferences for this household
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      responses:
+        '200':
+          description: Category channels, quiet hours, and current household timezone
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPreferences' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      summary: Replace the caller's household notification preferences
+      description: In-app defaults on. Push categories default on except shopping, but no device receives push before explicit opt-in. Quiet hours default disabled with 23:00–07:00 suggested times. All priorities respect quiet hours; there is no urgent bypass. Historical inbox entries are retained. Push preferences are rechecked at delivery.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationPreferenceInput' }
+      responses:
+        '200':
+          description: Saved preferences
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPreferences' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/push-config:
+    get:
+      summary: Read public web push availability after sign-in
+      responses:
+        '200':
+          description: Public VAPID key only; private key and contact are never returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled, publicKey, reason]
+                properties:
+                  enabled: { type: boolean }
+                  publicKey: { type: [string, 'null'] }
+                  reason: { type: [string, 'null'], enum: [server_setup, null] }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /v1/push-subscriptions:
+    get:
+      summary: List only the caller's push devices without exposing endpoint or encryption keys
+      responses:
+        '200':
+          description: Device status
+          content:
+            application/json:
+              schema: { type: object, required: [devices], properties: { devices: { type: array, items: { $ref: '#/components/schemas/PushDevice' } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Register or refresh the caller's browser push subscription
+      description: Explicit browser opt-in required. Only supported HTTPS browser push endpoints and valid encryption keys are accepted. A subscription is bound to one account and cannot be claimed by another. Repeated registration refreshes the same device. New devices receive only subsequent notifications, not the old inbox. Maximum ten active devices per account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushRegistration' }
+      responses:
+        '200':
+          description: Registered device
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PushDevice' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { description: Web push server setup incomplete }
+  /v1/push-subscriptions/{subscriptionId}:
+    delete:
+      summary: Disable only the caller's push device
+      description: Soft disable is idempotent. Pending deliveries are skipped. Clients also unsubscribe the local browser subscription when disabling this browser or signing out.
+      parameters:
+        - { in: path, name: subscriptionId, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Device disabled }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/announcements:
+    get:
+      summary: List announcements visible to the caller
+      description: Active recipients, the author, and household owners/admins can read. All lists are paginated; all includes expired records, ordered active first, then priority and newest publication.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: query
+          name: scope
+          schema: { type: string, enum: [all, needs_ack, expired], default: all }
+        - $ref: '#/components/parameters/HistoryLimit'
+        - $ref: '#/components/parameters/HistoryOffset'
+      responses:
+        '200':
+          description: Visible announcements
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [announcements]
+                properties:
+                  announcements: { type: array, items: { $ref: '#/components/schemas/Announcement' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Publish an announcement to selected active members
+      description: Any active member may publish. Recipients are fixed at publication. Creation is idempotent for the same normalized draft and retry key.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnnouncementDraft' }
+      responses:
+        '201':
+          description: Published announcement or original result of an identical retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Announcement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/announcements/{announcementId}:
+    get:
+      summary: Read an announcement and recipient acknowledgement state
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: announcementId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Visible announcement
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Announcement' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/announcements/{announcementId}/acknowledgement:
+    put:
+      summary: Acknowledge as the caller
+      description: Only an active selected recipient can acknowledge. Acknowledgement is permanent and safe to repeat; new acknowledgements close at optional expiry. Published content cannot be edited in this release.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: announcementId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Announcement with acknowledgement recorded once
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Announcement' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/polls:
+    get:
+      summary: List polls visible to the caller
+      description: Active selected voters, the author, and owners/admins can read aggregate results. Open polls are ordered by earliest deadline; closed polls by latest deadline.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: query
+          name: scope
+          schema: { type: string, enum: [open, needs_vote, closed], default: open }
+        - $ref: '#/components/parameters/HistoryLimit'
+        - $ref: '#/components/parameters/HistoryOffset'
+      responses:
+        '200':
+          description: Visible polls
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [polls]
+                properties:
+                  polls: { type: array, items: { $ref: '#/components/schemas/Poll' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Publish a single or multiple choice poll
+      description: Any active household member may publish. Options and voter eligibility are fixed at publication. Deadline is entered in the household timezone and must be in the future. Creation is idempotent.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PollDraft' }
+      responses:
+        '201':
+          description: Published poll or original result of an identical retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poll' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/polls/{pollId}:
+    get:
+      summary: Read a poll, aggregate results, and the caller's selections
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: pollId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Visible poll
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poll' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/polls/{pollId}/vote:
+    put:
+      summary: Replace the caller's complete selection atomically
+      description: Only active eligible voters may vote before the deadline. Single choice requires at most one option. Duplicate or foreign option IDs are rejected. An empty selection withdraws the caller's vote. Repeating the same selection never adds another vote. Existing votes remain counted if a voter later leaves the household.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: pollId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [optionIds]
+              properties:
+                optionIds:
+                  type: array
+                  maxItems: 10
+                  uniqueItems: true
+                  items: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Poll with updated results and caller selection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poll' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/events:
+    get:
+      summary: List household events and attendance
+      description: Active household members may list upcoming or past events. Attendance includes currently active members only.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: query
+          name: scope
+          schema: { type: string, enum: [upcoming, past], default: upcoming }
+        - $ref: '#/components/parameters/HistoryLimit'
+        - $ref: '#/components/parameters/HistoryOffset'
+      responses:
+        '200':
+          description: Events in the selected scope
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events: { type: array, items: { $ref: '#/components/schemas/Event' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Create a household event
+      description: Any active household member may create a future event. The idempotency key identifies retries of the same draft.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventDraft' }
+      responses:
+        '201':
+          description: Created event or original result of an idempotent retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/events/{eventId}:
+    get:
+      summary: Read an event and current attendance
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/events/{eventId}/attendance:
+    patch:
+      summary: Set the caller's attendance response
+      description: An active member may change only their own response until the event starts.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: eventId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [response]
+              properties:
+                response: { type: string, enum: [going, maybe, not_going] }
+      responses:
+        '200':
+          description: Event with updated attendance
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /health:
+    get:
+      security: []
+      summary: Liveness check
+      responses:
+        '200':
+          description: API process is running
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /v1/households/{id}/dashboard:
+    get:
+      summary: Read the household home dashboard from a consistent snapshot
+      description: Active members only. Balances exclude voids and Unpaid bills. Pending bills exclude voids and are ordered by earliest due date. Urgency uses the household timezone; due soon includes today through seven days ahead. Activity includes financial creation, edits, voids, provider-status changes, and reported transfers. The next upcoming meal, open shopping item count, and open chore summary are included.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Fresh dashboard snapshot; Cache-Control is no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dashboard'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/households/{id}/house-actions:
+    get:
+      summary: Read the current member's next household actions
+      description: Active members only. Returns up to three items per category for unanswered meal checks, pending chore swaps, assigned open chores and shopping, targeted unexpired announcements needing acknowledgement, and eligible open polls without a saved vote. Each category is ordered by its most relevant deadline or priority. This is a preview, not a complete list.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Fresh personal house action preview; Cache-Control is no-store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HouseActions' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/chores:
+    get:
+      summary: List household chores, open first by due time
+      description: Active household members only. Due times are instants; clients classify upcoming and overdue using the household timezone. Supports limit (1–100, default 50) and offset (default 0). Cache-Control is no-store.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { in: query, name: offset, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Chores
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chores]
+                properties:
+                  chores: { type: array, items: { $ref: '#/components/schemas/Chore' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Create a one-off chore for an active member
+      description: Any active member can create. dueAtLocal is interpreted in the household timezone and must be in the future.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChoreDraft' }
+      responses:
+        '201':
+          description: Created chore
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Chore' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/chores/{choreId}:
+    get:
+      summary: Read one household chore
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ChoreId' }
+      responses:
+        '200':
+          description: Chore
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Chore' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/chores/{choreId}/assignment:
+    patch:
+      summary: Reassign an open chore
+      description: Owner or admin only. Cancels any pending swap request.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ChoreId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [assigneeMemberId, expectedRevision]
+              properties:
+                assigneeMemberId: { type: string, format: uuid }
+                expectedRevision: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Updated chore, content: { application/json: { schema: { $ref: '#/components/schemas/Chore' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/chores/{choreId}/complete:
+    post:
+      summary: Complete an open chore
+      description: Assignee or owner/admin. Cancels any pending swap request.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ChoreId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChoreRevision' }
+      responses:
+        '200': { description: Completed chore, content: { application/json: { schema: { $ref: '#/components/schemas/Chore' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/chores/{choreId}/skip:
+    post:
+      summary: Skip an open chore with a reason
+      description: Assignee or owner/admin. Cancels any pending swap request.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ChoreId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, reason]
+              properties:
+                expectedRevision: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '200': { description: Skipped chore, content: { application/json: { schema: { $ref: '#/components/schemas/Chore' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/chores/{choreId}/swap-requests:
+    post:
+      summary: Ask another active member to take an open chore
+      description: Only the current assignee can request a swap. One request may be pending at a time.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ChoreId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, targetMemberId]
+              properties:
+                expectedRevision: { type: integer, minimum: 1 }
+                targetMemberId: { type: string, format: uuid }
+      responses:
+        '201': { description: Chore with pending swap, content: { application/json: { schema: { $ref: '#/components/schemas/Chore' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/chores/{choreId}/swap-requests/{swapId}/response:
+    post:
+      summary: Accept or decline a swap request
+      description: Only the requested active member can respond. Accepting atomically assigns the chore to them.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ChoreId' }
+        - { in: path, name: swapId, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, decision]
+              properties:
+                expectedRevision: { type: integer, minimum: 1 }
+                decision: { type: string, enum: [accepted, declined] }
+      responses:
+        '200': { description: Chore after swap response, content: { application/json: { schema: { $ref: '#/components/schemas/Chore' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/meals:
+    get:
+      summary: List household meal checks with optional status scope
+      description: Active members only. Scope all (default) orders upcoming first, then most recent past checks; reply returns checks awaiting the caller's response before their deadline. Results are paginated, up to 50 per request.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - { in: query, name: scope, schema: { type: string, enum: [all, reply, upcoming, past], default: all } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 50, default: 50 } }
+        - { in: query, name: offset, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Active household member's meal checks
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [meals]
+                properties:
+                  meals: { type: array, items: { $ref: '#/components/schemas/Meal' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Create a meal check
+      description: Any active member can create a meal check. Local date and time values use the household timezone. Repeating the same idempotency key with the same content returns the existing meal.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MealDraft' }
+      responses:
+        '201':
+          description: Created or repeated meal check
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Meal' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/meals/{mealId}:
+    get:
+      summary: Read a meal check
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: mealId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Meal check
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Meal' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/meals/{mealId}/response:
+    patch:
+      summary: Answer or change the caller's meal response before the deadline
+      description: The caller must be an active household member selected for this meal. Answers lock at the deadline.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: mealId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [response]
+              properties:
+                response: { type: string, enum: [joining, not_joining, maybe] }
+      responses:
+        '200':
+          description: Updated meal check and counts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Meal' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/meals/{mealId}/cooking-roles:
+    put:
+      summary: Replace cooking role assignments
+      description: Any active household member may assign selected active participants to custom cooking roles.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: mealId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [cookingRoles]
+              properties:
+                cookingRoles:
+                  type: array
+                  maxItems: 100
+                  items: { $ref: '#/components/schemas/MealRole' }
+      responses:
+        '200':
+          description: Meal check with updated roles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Meal' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/shopping-items:
+    get:
+      summary: List household shopping items
+      description: Active members only. Open items first, then purchased and cancelled items. Each page contains up to 100 items.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Shopping items
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ShoppingItem' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Add a shopping item
+      description: Any active member may add an item. A selected buyer must be an active member of the same household.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShoppingDraft' }
+      responses:
+        '201':
+          description: Created item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShoppingItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/shopping-items/{itemId}:
+    get:
+      summary: Read a shopping item
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - $ref: '#/components/parameters/ShoppingItemId'
+      responses:
+        '200':
+          description: Shopping item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShoppingItem' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Edit an open shopping item, including its optional buyer
+      description: Any active member may edit. Purchased and cancelled items cannot be edited. A stale revision returns 409.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - $ref: '#/components/parameters/ShoppingItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: '#/components/schemas/ShoppingDraft' }
+                - type: object
+                  required: [expectedRevision]
+                  properties:
+                    expectedRevision: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Updated item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShoppingItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/shopping-items/{itemId}/cancel:
+    post:
+      summary: Cancel an open shopping item
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - $ref: '#/components/parameters/ShoppingItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShoppingRevision' }
+      responses:
+        '200':
+          description: Cancelled item, retained in history
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShoppingItem' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/shopping-items/{itemId}/purchase:
+    post:
+      summary: Mark an open item purchased without creating an expense
+      description: Optional actual price uses integer minor units in the household currency. This does not affect balances.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - $ref: '#/components/parameters/ShoppingItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, purchasedPriceMinor]
+              properties:
+                expectedRevision: { type: integer, minimum: 1 }
+                purchasedPriceMinor: { type: [integer, 'null'], minimum: 0, maximum: 999999999999 }
+      responses:
+        '200':
+          description: Purchased item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShoppingItem' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/shopping-items/{itemId}/purchase-with-expense:
+    post:
+      summary: Confirm an expense and mark its shopping item purchased atomically
+      description: Use the normal expense preview endpoint before calling this endpoint. The expense title must start with 'Shopping:' followed by the item's current title, truncated to fit the expense title limit. The API recalculates shares, confirms the expense idempotently, and updates the item in one transaction. Retrying the same key and draft returns the linked expense.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - $ref: '#/components/parameters/ShoppingItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, expenseDraft, idempotencyKey]
+              properties:
+                expectedRevision: { type: integer, minimum: 1 }
+                expenseDraft: { $ref: '#/components/schemas/ExpenseDraft' }
+                idempotencyKey: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Purchased item and confirmed expense
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [item, expense]
+                properties:
+                  item: { $ref: '#/components/schemas/ShoppingItem' }
+                  expense: { $ref: '#/components/schemas/Expense' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/me:
+    get:
+      summary: Get the authenticated identity
+      responses:
+        '200':
+          description: Identity from Supabase Auth
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    patch:
+      summary: Update the caller's HouseMate display name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [displayName]
+              properties:
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/households:
+    get:
+      summary: List active households for the caller
+      responses:
+        '200':
+          description: Household memberships
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [households]
+                properties:
+                  households:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Household'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      summary: Create a household and its owner membership atomically
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, currency, timezone]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                currency:
+                  type: string
+                  enum: [USD, THB]
+                timezone:
+                  type: string
+                  description: IANA timezone, such as Asia/Bangkok.
+      responses:
+        '201':
+          description: Household created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/households/{id}:
+    get:
+      summary: Get a household when the caller is an active member
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Household details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          description: Household absent or not visible to the caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      summary: Edit household settings as owner or admin; only the owner may change currency before financial activity
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                timezone:
+                  type: string
+                  description: IANA timezone.
+                currency:
+                  type: string
+                  enum: [USD, THB]
+      responses:
+        '200':
+          description: Updated household
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/households/{id}/members:
+    get:
+      summary: List active household members for an active member
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      responses:
+        '200':
+          description: Members and their roles
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [members]
+                properties:
+                  members:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Member'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/households/{id}/members/{memberId}:
+    patch:
+      summary: Promote or demote a member as household owner; owner role cannot change here
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: memberId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [admin, member]
+      responses:
+        '200':
+          description: Updated membership
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/households/{id}/invites:
+    get:
+      summary: List recent invitation status for owners and admins; tokens cannot be retrieved again
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      responses:
+        '200':
+          description: Most recent 50 invitations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [invites]
+                properties:
+                  invites:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Invite'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      summary: Create a single-use shareable invitation valid for seven days
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      responses:
+        '201':
+          description: Invitation and its token, returned only once; never cache
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Invite'
+                  - type: object
+                    required: [token]
+                    properties:
+                      token:
+                        type: string
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/households/{id}/invites/{inviteId}:
+    delete:
+      summary: Revoke an unused invitation as owner or admin
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: inviteId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Invitation revoked
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/invites/{token}:
+    get:
+      summary: Preview a valid invitation for the signed-in caller
+      parameters:
+        - $ref: '#/components/parameters/InviteToken'
+      responses:
+        '200':
+          description: Household invitation preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitePreview'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/InviteUnavailable'
+  /v1/invites/{token}/accept:
+    post:
+      summary: Atomically redeem an invitation and join as a member
+      parameters:
+        - $ref: '#/components/parameters/InviteToken'
+      responses:
+        '200':
+          description: Joined household
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Household'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '410':
+          $ref: '#/components/responses/InviteUnavailable'
+  /v1/households/{id}/balances:
+    get:
+      summary: Read current member balances and informational transfer suggestions
+      description: Positive net means owed to the member; negative net means they owe. Confirmed expenses and Paid bills count; Unpaid bills remain pending. Recorded manual settlements adjust balances. Suggestions never create transfers.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      responses:
+        '200':
+          description: API-calculated household balances
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BalanceSummary' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/balances/{memberId}/entries:
+    get:
+      summary: Read the expenses, paid bills, and recorded transfers behind one member's balance
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: memberId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Paginated balance sources, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items: { $ref: '#/components/schemas/BalanceEntry' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/settlements/preview:
+    post:
+      summary: Preview a manual transfer and its balance effect without saving
+      description: Only an active sender or recipient may preview. The transfer occurred outside HouseMate and is not verified or processed here.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettlementDraft' }
+      responses:
+        '200':
+          description: Current and projected balances with any warnings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettlementPreview' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/settlements:
+    get:
+      summary: List recorded manual transfers for an active member
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Recorded transfers, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [settlements]
+                properties:
+                  settlements:
+                    type: array
+                    items: { $ref: '#/components/schemas/Settlement' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Record a manual transfer idempotently
+      description: Only the active sender or recipient may record it. A retry with the same UUID and draft returns the original record; a changed draft returns 409. HouseMate does not process or verify the transfer.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettlementCreate' }
+      responses:
+        '201':
+          description: Recorded transfer or original result of retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Settlement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/settlements/{settlementId}:
+    get:
+      summary: Read one recorded manual transfer
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: settlementId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Recorded transfer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Settlement' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/bills/preview:
+    post:
+      summary: Preview a hybrid bill split without saving
+      description: Any active member may preview. Positive charges are reserved from the bill, credits increase the base pool before being deducted from recipients. The API allocates all minor units exactly.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BillDraft' }
+      responses:
+        '200':
+          description: Authoritative bill breakdown
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BillPreview' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/bills:
+    get:
+      summary: List confirmed bills for an active household member
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Confirmed bills, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bills]
+                properties:
+                  bills:
+                    type: array
+                    items: { $ref: '#/components/schemas/Bill' }
+    post:
+      summary: Confirm a bill idempotently
+      description: Any active member may create. The same UUID and draft returns the original bill; a changed draft returns 409. Confirmation recalculates shares and locks household currency.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BillCreate' }
+      responses:
+        '201':
+          description: Confirmed bill or original result of retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bill' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/bills/{billId}:
+    get:
+      summary: Get a confirmed bill
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: billId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Bill detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bill' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Confirm a previously previewed bill edit
+      description: The creator or a household owner/admin may edit. Requires an unexpired API preview for the exact draft and current revision. Provider payment status remains controlled by the status endpoint. The API recalculates shares transactionally, records before/after snapshots, and supports idempotent retries.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: billId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BillEditConfirm' }
+      responses:
+        '200':
+          description: Updated bill or original result of an idempotent retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bill' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/bills/{billId}/edit-preview:
+    post:
+      summary: Preview a bill edit against the current revision
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: billId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BillEditDraft' }
+      responses:
+        '200':
+          description: Exact proposed shares and a ten-minute preview ID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BillEditPreview' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/bills/{billId}/status:
+    patch:
+      summary: Record whether the provider has been paid
+      description: Any active member may record a manual status change. Each change is audited. No payment is processed.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: billId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [paymentStatus]
+              properties:
+                paymentStatus: { type: string, enum: [unpaid, paid] }
+      responses:
+        '200':
+          description: Updated bill
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bill' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/bills/{billId}/void-preview:
+    post:
+      summary: Preview the balance effect of voiding a bill
+      description: A paid bill is removed from member balances. An unpaid bill is removed from pending totals. Existing settlements remain recorded.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: billId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VoidDraft' }
+      responses:
+        '200':
+          description: Proposed effect and a ten-minute preview ID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoidPreview' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/bills/{billId}/history:
+    get:
+      summary: Read a bill's creation, edits, provider status changes, and void history
+      description: Any active member of the bill's household may read this history. Changed fields include human-readable old and new values. Events are newest first.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: billId
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/HistoryLimit'
+        - $ref: '#/components/parameters/HistoryOffset'
+      responses:
+        '200':
+          description: Paginated bill history
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinancialHistoryPage' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/bills/{billId}/void:
+    post:
+      summary: Confirm a previously previewed bill void
+      description: The creator or a household owner/admin may void. The bill remains visible and immutable with actor, time, and optional reason. Confirmation is idempotent.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: billId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VoidConfirm' }
+      responses:
+        '200':
+          description: Voided bill or original result of an idempotent retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bill' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/expenses/preview:
+    post:
+      summary: Calculate an expense split without saving it
+      description: Any active household member may preview. The API validates active payer and participants and allocates integer minor units deterministically.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpenseDraft'
+      responses:
+        '200':
+          description: Authoritative breakdown
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpensePreview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/households/{id}/expenses:
+    get:
+      summary: List confirmed expenses for an active household member
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Confirmed expenses, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [expenses]
+                properties:
+                  expenses:
+                    type: array
+                    items: { $ref: '#/components/schemas/Expense' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      summary: Confirm a shared expense idempotently
+      description: Any active member may create. Reusing the same UUID and draft returns the original expense; a different draft with that UUID returns 409. Confirmation recalculates the split and locks household currency in the same transaction.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpenseCreate'
+      responses:
+        '201':
+          description: Confirmed expense (or the original result of a retry)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Expense' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/households/{id}/expenses/{expenseId}:
+    get:
+      summary: Get one confirmed expense
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: expenseId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Expense detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Expense' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      summary: Confirm a previously previewed expense edit
+      description: The creator or a household owner/admin may edit. Requires an unexpired API preview for the exact draft and current revision. The API recalculates shares transactionally, records before/after snapshots, and supports idempotent retries.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: expenseId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpenseEditConfirm' }
+      responses:
+        '200':
+          description: Updated expense or original result of an idempotent retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Expense' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/expenses/{expenseId}/edit-preview:
+    post:
+      summary: Preview an expense edit against the current revision
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: expenseId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpenseEditDraft' }
+      responses:
+        '200':
+          description: Exact proposed shares and a ten-minute preview ID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExpenseEditPreview' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/expenses/{expenseId}/void-preview:
+    post:
+      summary: Preview the balance effect of voiding an expense
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: expenseId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VoidDraft' }
+      responses:
+        '200':
+          description: Proposed member balances and a ten-minute preview ID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoidPreview' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/expenses/{expenseId}/void:
+    post:
+      summary: Confirm a previously previewed expense void
+      description: The creator or a household owner/admin may void. The expense remains visible and immutable with actor, time, and optional reason. Its shares no longer affect balances. Existing settlements remain recorded. Confirmation is idempotent.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: expenseId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VoidConfirm' }
+      responses:
+        '200':
+          description: Voided expense or original result of an idempotent retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Expense' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/households/{id}/expenses/{expenseId}/history:
+    get:
+      summary: Read an expense's creation, edits, and void history
+      description: Any active member of the expense's household may read this history. Changed fields include human-readable old and new values. Events are newest first.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - in: path
+          name: expenseId
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/HistoryLimit'
+        - $ref: '#/components/parameters/HistoryOffset'
+      responses:
+        '200':
+          description: Paginated expense history
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinancialHistoryPage' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  parameters:
+    ChoreId:
+      in: path
+      name: choreId
+      required: true
+      schema: { type: string, format: uuid }
+    ShoppingItemId:
+      in: path
+      name: itemId
+      required: true
+      schema: { type: string, format: uuid }
+    HouseholdId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    HistoryLimit:
+      in: query
+      name: limit
+      schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+    HistoryOffset:
+      in: query
+      name: offset
+      schema: { type: integer, minimum: 0, default: 0 }
+    InviteToken:
+      in: path
+      name: token
+      required: true
+      schema:
+        type: string
+        description: 43-character base64url bearer token from a shareable invite link.
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    BadRequest:
+      description: Invalid input
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthenticated:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Active member lacks the required role
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Entity absent or outside the caller's household
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: State conflict such as an existing membership or locked currency
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InviteUnavailable:
+      description: Invitation expired, redeemed, or revoked
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    NotificationPage:
+      type: object
+      required: [notifications, unreadCount, nextCursor]
+      properties:
+        notifications:
+          type: array
+          items:
+            type: object
+            required: [id, householdId, category, priority, entityType, entityId, title, body, createdAt, readAt, href]
+            properties:
+              id: { type: string, format: uuid }
+              householdId: { type: string, format: uuid }
+              category: { type: string, enum: [money, bills, settlements, meals, chores, shopping, events, announcements, polls] }
+              priority: { type: string, enum: [low, normal, important, urgent] }
+              entityType: { type: string, enum: [expense, bill, settlement, meal, chore, shopping, event, announcement, poll] }
+              entityId: { type: string, format: uuid }
+              title: { type: string }
+              body: { type: string }
+              createdAt: { type: string, format: date-time }
+              readAt: { type: [string, 'null'], format: date-time }
+              href: { type: string, description: Relative API-generated web link; the destination checks current access. }
+        unreadCount: { type: integer, minimum: 0 }
+        nextCursor: { type: [string, 'null'] }
+    NotificationChannels:
+      type: object
+      additionalProperties: false
+      required: [inApp, webPush]
+      properties:
+        inApp: { type: boolean }
+        webPush: { type: boolean }
+    NotificationPreferenceInput:
+      type: object
+      additionalProperties: false
+      required: [categories, quietHours]
+      properties:
+        categories:
+          type: object
+          additionalProperties: false
+          required: [money, bills, settlements, meals, chores, shopping, events, announcements, polls]
+          properties:
+            money: { $ref: '#/components/schemas/NotificationChannels' }
+            bills: { $ref: '#/components/schemas/NotificationChannels' }
+            settlements: { $ref: '#/components/schemas/NotificationChannels' }
+            meals: { $ref: '#/components/schemas/NotificationChannels' }
+            chores: { $ref: '#/components/schemas/NotificationChannels' }
+            shopping: { $ref: '#/components/schemas/NotificationChannels' }
+            events: { $ref: '#/components/schemas/NotificationChannels' }
+            announcements: { $ref: '#/components/schemas/NotificationChannels' }
+            polls: { $ref: '#/components/schemas/NotificationChannels' }
+        quietHours:
+          type: object
+          additionalProperties: false
+          required: [enabled, start, end]
+          properties:
+            enabled: { type: boolean }
+            start: { type: string, pattern: '^([01]\d|2[0-3]):[0-5]\d$' }
+            end: { type: string, pattern: '^([01]\d|2[0-3]):[0-5]\d$' }
+    NotificationPreferences:
+      type: object
+      required: [categories, quietHours, timezone]
+      properties:
+        categories: { $ref: '#/components/schemas/NotificationPreferenceInput/properties/categories' }
+        quietHours: { $ref: '#/components/schemas/NotificationPreferenceInput/properties/quietHours' }
+        timezone: { type: string }
+    PushRegistration:
+      type: object
+      additionalProperties: false
+      required: [endpoint, keys]
+      properties:
+        endpoint: { type: string, format: uri, maxLength: 2048 }
+        refreshOnly: { type: boolean, default: false, description: True for silent refresh; never registers a new device or re-enables a disabled one. }
+        keys:
+          type: object
+          additionalProperties: false
+          required: [p256dh, auth]
+          properties:
+            p256dh: { type: string, minLength: 80, maxLength: 100 }
+            auth: { type: string, minLength: 20, maxLength: 30 }
+    PushDevice:
+      type: object
+      required: [id, enabled, createdAt, lastSentAt, lastError]
+      properties:
+        id: { type: string, format: uuid }
+        enabled: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        lastSentAt: { type: [string, 'null'], format: date-time }
+        lastError: { type: [string, 'null'], description: Sanitized status code only, never endpoint or provider response body. }
+    AnnouncementDraft:
+      type: object
+      additionalProperties: false
+      required: [title, body, priority, requiresAcknowledgement, recipientIds, idempotencyKey]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        body: { type: string, minLength: 1, maxLength: 4000 }
+        priority: { type: string, enum: [normal, important, urgent] }
+        requiresAcknowledgement: { type: boolean }
+        recipientIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        expiresAtLocal: { type: [string, 'null'], description: 'Optional future YYYY-MM-DDTHH:mm in the household timezone' }
+        idempotencyKey: { type: string, format: uuid }
+    Announcement:
+      type: object
+      required: [id, householdId, title, body, priority, requiresAcknowledgement, expiresAt, timezone, publishedAt, authorDisplayName, viewerMemberId, recipients, counts, expired, canAcknowledge]
+      properties:
+        id: { type: string, format: uuid }
+        householdId: { type: string, format: uuid }
+        title: { type: string }
+        body: { type: string }
+        priority: { type: string, enum: [normal, important, urgent] }
+        requiresAcknowledgement: { type: boolean }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        timezone: { type: string }
+        publishedAt: { type: string, format: date-time }
+        authorDisplayName: { type: string }
+        viewerMemberId: { type: string, format: uuid }
+        recipients:
+          type: array
+          items:
+            type: object
+            required: [memberId, displayName, active, acknowledgedAt]
+            properties:
+              memberId: { type: string, format: uuid }
+              displayName: { type: string }
+              active: { type: boolean }
+              acknowledgedAt: { type: [string, 'null'], format: date-time }
+        counts:
+          type: object
+          required: [total, acknowledged, awaiting]
+          properties:
+            total: { type: integer, minimum: 1 }
+            acknowledged: { type: integer, minimum: 0 }
+            awaiting: { type: integer, minimum: 0, description: Active recipients who have not acknowledged; zero when acknowledgement is not requested }
+        expired: { type: boolean }
+        canAcknowledge: { type: boolean }
+    PollDraft:
+      type: object
+      additionalProperties: false
+      required: [question, options, allowMultiple, deadlineLocal, voterIds, idempotencyKey]
+      properties:
+        question: { type: string, minLength: 1, maxLength: 240 }
+        options:
+          type: array
+          minItems: 2
+          maxItems: 10
+          items: { type: string, minLength: 1, maxLength: 100 }
+        allowMultiple: { type: boolean }
+        deadlineLocal: { type: string, description: 'Future YYYY-MM-DDTHH:mm in household timezone' }
+        voterIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        idempotencyKey: { type: string, format: uuid }
+    Poll:
+      type: object
+      required: [id, householdId, question, allowMultiple, deadline, timezone, createdAt, authorDisplayName, viewerMemberId, options, voterCount, activeVoterCount, responseCount, myOptionIds, canVote, closed]
+      properties:
+        id: { type: string, format: uuid }
+        householdId: { type: string, format: uuid }
+        question: { type: string }
+        allowMultiple: { type: boolean }
+        deadline: { type: string, format: date-time }
+        timezone: { type: string }
+        createdAt: { type: string, format: date-time }
+        authorDisplayName: { type: string }
+        viewerMemberId: { type: string, format: uuid }
+        options:
+          type: array
+          items:
+            type: object
+            required: [id, label, position, voteCount]
+            properties:
+              id: { type: string, format: uuid }
+              label: { type: string }
+              position: { type: integer, minimum: 0 }
+              voteCount: { type: integer, minimum: 0 }
+        voterCount: { type: integer, minimum: 1, description: Number of selected voters at publication }
+        activeVoterCount: { type: integer, minimum: 0 }
+        responseCount: { type: integer, minimum: 0, description: Distinct voters with at least one saved selection, including former members }
+        myOptionIds:
+          type: array
+          items: { type: string, format: uuid }
+        canVote: { type: boolean }
+        closed: { type: boolean }
+    EventDraft:
+      type: object
+      additionalProperties: false
+      required: [title, startsAtLocal, idempotencyKey]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 1000 }
+        location: { type: string, maxLength: 160 }
+        startsAtLocal: { type: string, description: 'YYYY-MM-DDTHH:mm in household timezone; must be in the future' }
+        endsAtLocal: { type: [string, 'null'], description: 'Optional YYYY-MM-DDTHH:mm in household timezone; after start' }
+        idempotencyKey: { type: string, format: uuid }
+    Event:
+      type: object
+      required: [id, householdId, title, description, location, startsAt, endsAt, timezone, createdAt, creatorDisplayName, viewerMemberId, attendees, counts, canRespond]
+      properties:
+        id: { type: string, format: uuid }
+        householdId: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string }
+        location: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: [string, 'null'], format: date-time }
+        timezone: { type: string }
+        createdAt: { type: string, format: date-time }
+        creatorDisplayName: { type: string }
+        viewerMemberId: { type: string, format: uuid }
+        attendees:
+          type: array
+          items:
+            type: object
+            required: [memberId, displayName, response, respondedAt]
+            properties:
+              memberId: { type: string, format: uuid }
+              displayName: { type: string }
+              response: { type: [string, 'null'], enum: [going, maybe, not_going, null] }
+              respondedAt: { type: [string, 'null'], format: date-time }
+        counts:
+          type: object
+          required: [going, maybe, notGoing, awaiting]
+          properties:
+            going: { type: integer, minimum: 0 }
+            maybe: { type: integer, minimum: 0 }
+            notGoing: { type: integer, minimum: 0 }
+            awaiting: { type: integer, minimum: 0 }
+        canRespond: { type: boolean }
+    ChoreDraft:
+      type: object
+      additionalProperties: false
+      required: [title, note, dueAtLocal, assigneeMemberId]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        note: { type: [string, 'null'], maxLength: 500 }
+        dueAtLocal: { type: string, description: 'YYYY-MM-DDTHH:mm in household timezone' }
+        assigneeMemberId: { type: string, format: uuid }
+    ChoreRevision:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision: { type: integer, minimum: 1 }
+    Chore:
+      type: object
+      required: [id, householdId, title, note, dueAt, timezone, assigneeMemberId, assigneeDisplayName, status, skipReason, closedAt, closedByDisplayName, createdByDisplayName, createdAt, updatedAt, revision, viewerMemberId, canManage, canComplete, canRequestSwap, pendingSwap]
+      properties:
+        id: { type: string, format: uuid }
+        householdId: { type: string, format: uuid }
+        title: { type: string }
+        note: { type: [string, 'null'] }
+        dueAt: { type: string, format: date-time }
+        timezone: { type: string }
+        assigneeMemberId: { type: string, format: uuid }
+        assigneeDisplayName: { type: string }
+        status: { type: string, enum: [open, completed, skipped] }
+        skipReason: { type: [string, 'null'] }
+        closedAt: { type: [string, 'null'], format: date-time }
+        closedByDisplayName: { type: [string, 'null'] }
+        createdByDisplayName: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        revision: { type: integer }
+        viewerMemberId: { type: string, format: uuid }
+        canManage: { type: boolean }
+        canComplete: { type: boolean }
+        canRequestSwap: { type: boolean }
+        pendingSwap:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [id, requestedByMemberId, requestedByDisplayName, targetMemberId, targetDisplayName, createdAt, canRespond]
+              properties:
+                id: { type: string, format: uuid }
+                requestedByMemberId: { type: string, format: uuid }
+                requestedByDisplayName: { type: string }
+                targetMemberId: { type: string, format: uuid }
+                targetDisplayName: { type: string }
+                createdAt: { type: string, format: date-time }
+                canRespond: { type: boolean }
+    ShoppingDraft:
+      type: object
+      required: [title, quantity, unit, note, priority, assignedBuyerMemberId, estimatedPriceMinor]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        quantity: { type: [number, 'null'], minimum: 0.001, maximum: 999999999, description: 'At most three decimal places' }
+        unit: { type: [string, 'null'], maxLength: 40 }
+        note: { type: [string, 'null'], maxLength: 500 }
+        priority: { type: string, enum: [low, normal, high] }
+        assignedBuyerMemberId: { type: [string, 'null'], format: uuid }
+        estimatedPriceMinor: { type: [integer, 'null'], minimum: 0, maximum: 999999999999 }
+    ShoppingRevision:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision: { type: integer, minimum: 1 }
+    ShoppingItem:
+      allOf:
+        - { $ref: '#/components/schemas/ShoppingDraft' }
+        - type: object
+          required: [id, householdId, currency, status, assignedBuyerDisplayName, purchasedPriceMinor, purchasedByDisplayName, purchasedAt, cancelledAt, linkedExpenseId, linkedExpenseVoidedAt, createdByDisplayName, createdAt, updatedAt, revision, viewerMemberId]
+          properties:
+            id: { type: string, format: uuid }
+            householdId: { type: string, format: uuid }
+            currency: { type: string, enum: [USD, THB] }
+            status: { type: string, enum: [needed, assigned, purchased, cancelled] }
+            assignedBuyerDisplayName: { type: [string, 'null'] }
+            purchasedPriceMinor: { type: [integer, 'null'], minimum: 0 }
+            purchasedByDisplayName: { type: [string, 'null'] }
+            purchasedAt: { type: [string, 'null'], format: date-time }
+            cancelledAt: { type: [string, 'null'], format: date-time }
+            linkedExpenseId: { type: [string, 'null'], format: uuid }
+            linkedExpenseVoidedAt: { type: [string, 'null'], format: date-time }
+            createdByDisplayName: { type: string }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+            revision: { type: integer, minimum: 1 }
+            viewerMemberId: { type: string, format: uuid }
+    MealRole:
+      type: object
+      additionalProperties: false
+      required: [memberId, role]
+      properties:
+        memberId: { type: string, format: uuid }
+        role: { type: string, minLength: 1, maxLength: 60 }
+    MealDraft:
+      type: object
+      additionalProperties: false
+      required: [mealType, question, startsAtLocal, responseDeadlineLocal, participantIds, cookingRoles, idempotencyKey]
+      properties:
+        mealType: { type: string, enum: [breakfast, lunch, dinner, other] }
+        question: { type: string, minLength: 1, maxLength: 240 }
+        startsAtLocal: { type: string, description: 'YYYY-MM-DDTHH:mm in household timezone' }
+        responseDeadlineLocal: { type: string, description: 'YYYY-MM-DDTHH:mm in household timezone; future and before meal' }
+        participantIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, format: uuid }
+        cookingRoles:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MealRole' }
+        idempotencyKey: { type: string, format: uuid }
+    Meal:
+      type: object
+      required: [id, householdId, mealType, question, startsAt, responseDeadline, timezone, createdAt, creatorDisplayName, viewerMemberId, participants, counts, cookingRoles, canRespond]
+      properties:
+        id: { type: string, format: uuid }
+        householdId: { type: string, format: uuid }
+        mealType: { type: string, enum: [breakfast, lunch, dinner, other] }
+        question: { type: string }
+        startsAt: { type: string, format: date-time }
+        responseDeadline: { type: string, format: date-time }
+        timezone: { type: string }
+        createdAt: { type: string, format: date-time }
+        creatorDisplayName: { type: string }
+        viewerMemberId: { type: string, format: uuid }
+        participants:
+          type: array
+          items:
+            type: object
+            required: [memberId, displayName, response, respondedAt]
+            properties:
+              memberId: { type: string, format: uuid }
+              displayName: { type: string }
+              response: { type: [string, 'null'], enum: [joining, not_joining, maybe, null] }
+              respondedAt: { type: [string, 'null'], format: date-time }
+        counts:
+          type: object
+          required: [joining, notJoining, maybe, awaiting]
+          properties:
+            joining: { type: integer, minimum: 0 }
+            notJoining: { type: integer, minimum: 0 }
+            maybe: { type: integer, minimum: 0 }
+            awaiting: { type: integer, minimum: 0 }
+        cookingRoles:
+          type: array
+          items:
+            type: object
+            required: [memberId, role, displayName]
+            properties:
+              memberId: { type: string, format: uuid }
+              role: { type: string }
+              displayName: { type: string }
+        canRespond: { type: boolean }
+    Dashboard:
+      type: object
+      required: [householdId, generatedAt, timezone, today, dueSoonDays, balance, pendingBills, nextMeal, shoppingOpenCount, chores, recentActivity]
+      properties:
+        householdId: { type: string, format: uuid }
+        generatedAt: { type: string, format: date-time }
+        timezone: { type: string }
+        today: { type: string, format: date }
+        dueSoonDays: { type: integer, const: 7 }
+        shoppingOpenCount: { type: integer, minimum: 0 }
+        chores:
+          type: object
+          required: [openCount, overdueCount, nextDue]
+          properties:
+            openCount: { type: integer, minimum: 0 }
+            overdueCount: { type: integer, minimum: 0 }
+            nextDue:
+              anyOf:
+                - type: 'null'
+                - type: object
+                  required: [id, title, dueAt, assigneeDisplayName]
+                  properties:
+                    id: { type: string, format: uuid }
+                    title: { type: string }
+                    dueAt: { type: string, format: date-time }
+                    assigneeDisplayName: { type: string }
+        nextMeal:
+          anyOf:
+            - type: 'null'
+            - type: object
+              required: [id, mealType, question, startsAt, responseDeadline, joiningCount, awaitingCount]
+              properties:
+                id: { type: string, format: uuid }
+                mealType: { type: string, enum: [breakfast, lunch, dinner, other] }
+                question: { type: string }
+                startsAt: { type: string, format: date-time }
+                responseDeadline: { type: string, format: date-time }
+                joiningCount: { type: integer, minimum: 0 }
+                awaitingCount: { type: integer, minimum: 0 }
+        balance:
+          $ref: '#/components/schemas/BalanceSummary'
+        pendingBills:
+          type: object
+          required: [overdueCount, dueSoonCount, items, hasMore]
+          properties:
+            overdueCount: { type: integer, minimum: 0 }
+            dueSoonCount: { type: integer, minimum: 0 }
+            hasMore: { type: boolean }
+            items:
+              type: array
+              maxItems: 5
+              items:
+                type: object
+                required: [id, title, provider, dueDate, amountMinor, urgency]
+                properties:
+                  id: { type: string, format: uuid }
+                  title: { type: string }
+                  provider: { type: string }
+                  dueDate: { type: string, format: date }
+                  amountMinor: { type: integer, minimum: 1 }
+                  urgency: { type: string, enum: [overdue, due_soon, upcoming] }
+        recentActivity:
+          type: array
+          maxItems: 10
+          description: Latest ten financial events, newest first with a stable ID tie-break. Titles describe the current record; record history contains prior values.
+          items:
+            type: object
+            required: [id, resourceType, resourceId, kind, title, occurredAt, actorDisplayName]
+            properties:
+              id: { type: string }
+              resourceType: { type: string, enum: [expense, bill, settlement] }
+              resourceId: { type: string, format: uuid }
+              kind: { type: string, enum: [created, edited, voided, paid, unpaid, recorded] }
+              title: { type: string }
+              occurredAt: { type: string, format: date-time }
+              actorDisplayName: { type: string }
+    HouseActions:
+      type: object
+      required: [householdId, generatedAt, mealResponses, swapRequests, chores, shopping, announcements, polls]
+      properties:
+        householdId: { type: string, format: uuid }
+        generatedAt: { type: string, format: date-time }
+        mealResponses:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [id, title, startsAt, responseDeadline]
+            properties:
+              id: { type: string, format: uuid }
+              title: { type: string }
+              startsAt: { type: string, format: date-time }
+              responseDeadline: { type: string, format: date-time }
+        swapRequests:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [id, title, dueAt]
+            properties:
+              id: { type: string, format: uuid }
+              title: { type: string }
+              dueAt: { type: string, format: date-time }
+        chores:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [id, title, dueAt]
+            properties:
+              id: { type: string, format: uuid }
+              title: { type: string }
+              dueAt: { type: string, format: date-time }
+        shopping:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [id, title, quantity, unit, priority]
+            properties:
+              id: { type: string, format: uuid }
+              title: { type: string }
+              quantity: { type: [number, 'null'] }
+              unit: { type: [string, 'null'] }
+              priority: { type: string, enum: [low, normal, high] }
+        announcements:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [id, title, priority, expiresAt]
+            properties:
+              id: { type: string, format: uuid }
+              title: { type: string }
+              priority: { type: string, enum: [normal, important, urgent] }
+              expiresAt: { type: [string, 'null'], format: date-time }
+        polls:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [id, question, deadline]
+            properties:
+              id: { type: string, format: uuid }
+              question: { type: string }
+              deadline: { type: string, format: date-time }
+    MemberBalance:
+      type: object
+      required: [memberId, displayName, status, netMinor, owesMinor, owedMinor]
+      properties:
+        memberId: { type: string, format: uuid }
+        displayName: { type: string }
+        status: { type: string, enum: [active, left, removed, invited] }
+        netMinor: { type: integer, description: 'Positive means owed to this member; negative means they owe.' }
+        owesMinor: { type: integer, minimum: 0 }
+        owedMinor: { type: integer, minimum: 0 }
+    SettlementSuggestion:
+      type: object
+      required: [senderMemberId, senderDisplayName, recipientMemberId, recipientDisplayName, amountMinor]
+      properties:
+        senderMemberId: { type: string, format: uuid }
+        senderDisplayName: { type: string }
+        recipientMemberId: { type: string, format: uuid }
+        recipientDisplayName: { type: string }
+        amountMinor: { type: integer, minimum: 1 }
+    BalanceSummary:
+      type: object
+      required: [householdId, currency, viewerMemberId, members, suggestions, pendingBillCount, pendingBillAmountMinor]
+      properties:
+        householdId: { type: string, format: uuid }
+        currency: { type: string, enum: [USD, THB] }
+        viewerMemberId: { type: string, format: uuid }
+        members:
+          type: array
+          items: { $ref: '#/components/schemas/MemberBalance' }
+        suggestions:
+          type: array
+          items: { $ref: '#/components/schemas/SettlementSuggestion' }
+        pendingBillCount: { type: integer, minimum: 0 }
+        pendingBillAmountMinor: { type: integer, minimum: 0 }
+    BalanceEntry:
+      type: object
+      required: [sourceType, sourceId, title, occurredOn, paidMinor, shareMinor, sentMinor, receivedMinor, effectMinor]
+      properties:
+        sourceType: { type: string, enum: [expense, bill, settlement] }
+        sourceId: { type: string, format: uuid }
+        title: { type: string }
+        occurredOn: { type: string, format: date }
+        paidMinor: { type: integer, minimum: 0 }
+        shareMinor: { type: integer, minimum: 0 }
+        sentMinor: { type: integer, minimum: 0 }
+        receivedMinor: { type: integer, minimum: 0 }
+        effectMinor: { type: integer }
+    SettlementDraft:
+      type: object
+      required: [senderMemberId, recipientMemberId, amountMinor, currency, settledOn]
+      properties:
+        senderMemberId: { type: string, format: uuid }
+        recipientMemberId: { type: string, format: uuid }
+        amountMinor: { type: integer, minimum: 1, maximum: 999999999999 }
+        currency: { type: string, enum: [USD, THB] }
+        settledOn: { type: string, format: date }
+        method: { type: string, maxLength: 80 }
+        note: { type: string, maxLength: 500 }
+    SettlementCreate:
+      allOf:
+        - $ref: '#/components/schemas/SettlementDraft'
+        - type: object
+          required: [idempotencyKey]
+          properties:
+            idempotencyKey: { type: string, format: uuid }
+    SettlementPreview:
+      allOf:
+        - $ref: '#/components/schemas/SettlementDraft'
+        - type: object
+          required: [senderDisplayName, recipientDisplayName, senderBeforeMinor, receiverBeforeMinor, senderAfterMinor, receiverAfterMinor, recommendedAmountMinor, warnings]
+          properties:
+            senderDisplayName: { type: string }
+            recipientDisplayName: { type: string }
+            senderBeforeMinor: { type: integer }
+            receiverBeforeMinor: { type: integer }
+            senderAfterMinor: { type: integer }
+            receiverAfterMinor: { type: integer }
+            recommendedAmountMinor: { type: integer, minimum: 0 }
+            warnings:
+              type: array
+              items: { type: string }
+    Settlement:
+      allOf:
+        - $ref: '#/components/schemas/SettlementDraft'
+        - type: object
+          required: [id, householdId, senderDisplayName, recipientDisplayName, recordedByDisplayName, createdAt]
+          properties:
+            id: { type: string, format: uuid }
+            householdId: { type: string, format: uuid }
+            senderDisplayName: { type: string }
+            recipientDisplayName: { type: string }
+            recordedByDisplayName: { type: string }
+            createdAt: { type: string, format: date-time }
+    BillAdjustment:
+      type: object
+      required: [label, kind, amountMinor, memberIds]
+      properties:
+        label: { type: string, minLength: 1, maxLength: 160 }
+        kind: { type: string, enum: [individual_charge, shared_charge, individual_credit, shared_credit] }
+        amountMinor: { type: integer, minimum: 1, maximum: 999999999999 }
+        memberIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, format: uuid }
+    BillDraft:
+      type: object
+      required: [title, billType, provider, amountMinor, currency, periodStart, periodEnd, dueDate, payerMemberId, paymentStatus, sharedParticipantIds, adjustments]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        billType: { type: string, enum: [electricity, water, internet, rent, other] }
+        provider: { type: string, minLength: 1, maxLength: 160 }
+        amountMinor: { type: integer, minimum: 1, maximum: 999999999999 }
+        currency: { type: string, enum: [USD, THB] }
+        periodStart: { type: string, format: date }
+        periodEnd: { type: string, format: date }
+        dueDate: { type: string, format: date }
+        payerMemberId: { type: string, format: uuid }
+        paymentStatus: { type: string, enum: [unpaid, paid] }
+        sharedParticipantIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, format: uuid }
+        adjustments:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/BillAdjustment' }
+    BillCreate:
+      allOf:
+        - $ref: '#/components/schemas/BillDraft'
+        - type: object
+          required: [idempotencyKey]
+          properties:
+            idempotencyKey: { type: string, format: uuid }
+    BillPreview:
+      allOf:
+        - $ref: '#/components/schemas/BillDraft'
+        - type: object
+          required: [baseMinor, chargeMinor, creditMinor, shares, adjustmentBreakdown]
+          properties:
+            baseMinor: { type: integer, minimum: 0 }
+            chargeMinor: { type: integer, minimum: 0 }
+            creditMinor: { type: integer, minimum: 0 }
+            shares:
+              type: array
+              items:
+                type: object
+                required: [memberId, displayName, baseMinor, adjustmentMinor, amountMinor]
+                properties:
+                  memberId: { type: string, format: uuid }
+                  displayName: { type: string }
+                  baseMinor: { type: integer }
+                  adjustmentMinor: { type: integer }
+                  amountMinor: { type: integer, minimum: 0 }
+            adjustmentBreakdown:
+              type: array
+              items:
+                allOf:
+                  - $ref: '#/components/schemas/BillAdjustment'
+                  - type: object
+                    required: [shares]
+                    properties:
+                      shares:
+                        type: array
+                        items:
+                          type: object
+                          required: [memberId, displayName, amountMinor]
+                          properties:
+                            memberId: { type: string, format: uuid }
+                            displayName: { type: string }
+                            amountMinor: { type: integer, minimum: 0 }
+    Bill:
+      allOf:
+        - $ref: '#/components/schemas/BillPreview'
+        - type: object
+          required: [id, householdId, payerDisplayName, createdByDisplayName, createdAt, statusUpdatedAt, revision, updatedAt, canEdit, canVoid, voidedAt, voidedByDisplayName, voidReason]
+          properties:
+            id: { type: string, format: uuid }
+            householdId: { type: string, format: uuid }
+            payerDisplayName: { type: string }
+            createdByDisplayName: { type: string }
+            createdAt: { type: string, format: date-time }
+            statusUpdatedAt: { type: string, format: date-time }
+            revision: { type: integer, minimum: 1 }
+            updatedAt: { type: string, format: date-time }
+            canEdit: { type: boolean }
+            canVoid: { type: boolean }
+            voidedAt: { type: [string, 'null'], format: date-time }
+            voidedByDisplayName: { type: [string, 'null'] }
+            voidReason: { type: [string, 'null'] }
+    BillEditDraft:
+      allOf:
+        - $ref: '#/components/schemas/BillDraft'
+        - type: object
+          required: [expectedRevision]
+          properties:
+            expectedRevision: { type: integer, minimum: 1 }
+    BillEditConfirm:
+      allOf:
+        - $ref: '#/components/schemas/BillEditDraft'
+        - type: object
+          required: [previewId, idempotencyKey]
+          properties:
+            previewId: { type: string, format: uuid }
+            idempotencyKey: { type: string, format: uuid }
+    BillEditPreview:
+      allOf:
+        - $ref: '#/components/schemas/BillPreview'
+        - type: object
+          required: [expectedRevision, previewId, expiresAt]
+          properties:
+            expectedRevision: { type: integer, minimum: 1 }
+            previewId: { type: string, format: uuid }
+            expiresAt: { type: string, format: date-time }
+    ExpenseDraft:
+      type: object
+      additionalProperties: false
+      required: [title, amountMinor, currency, spentOn, payerMemberId, split]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        amountMinor: { type: integer, minimum: 1, maximum: 999999999999 }
+        currency: { type: string, enum: [USD, THB] }
+        spentOn: { type: string, format: date }
+        payerMemberId: { type: string, format: uuid }
+        split:
+          type: object
+          additionalProperties: false
+          required: [method, shares]
+          properties:
+            method: { type: string, enum: [equal, exact, percentage, ratio] }
+            shares:
+              type: array
+              minItems: 1
+              maxItems: 100
+              items:
+                type: object
+                additionalProperties: false
+                required: [memberId]
+                properties:
+                  memberId: { type: string, format: uuid }
+                  value: { type: integer, minimum: 0, description: 'Exact minor units, percentage basis points, or positive ratio weight. Omit for equal.' }
+    ExpenseCreate:
+      type: object
+      additionalProperties: false
+      required: [title, amountMinor, currency, spentOn, payerMemberId, split, idempotencyKey]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        amountMinor: { type: integer, minimum: 1, maximum: 999999999999 }
+        currency: { type: string, enum: [USD, THB] }
+        spentOn: { type: string, format: date }
+        payerMemberId: { type: string, format: uuid }
+        split:
+          $ref: '#/components/schemas/ExpenseSplit'
+        idempotencyKey: { type: string, format: uuid }
+    ExpenseSplit:
+      type: object
+      additionalProperties: false
+      required: [method, shares]
+      properties:
+        method: { type: string, enum: [equal, exact, percentage, ratio] }
+        shares:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [memberId]
+            properties:
+              memberId: { type: string, format: uuid }
+              value: { type: integer, minimum: 0 }
+    ExpenseShare:
+      type: object
+      required: [memberId, displayName, amountMinor]
+      properties:
+        memberId: { type: string, format: uuid }
+        displayName: { type: string }
+        amountMinor: { type: integer, minimum: 0 }
+    ExpensePreview:
+      type: object
+      required: [title, amountMinor, currency, spentOn, payerMemberId, splitMethod, shares]
+      properties:
+        title: { type: string }
+        amountMinor: { type: integer }
+        currency: { type: string, enum: [USD, THB] }
+        spentOn: { type: string, format: date }
+        payerMemberId: { type: string, format: uuid }
+        splitMethod: { type: string, enum: [equal, exact, percentage, ratio] }
+        shares:
+          type: array
+          items: { $ref: '#/components/schemas/ExpenseShare' }
+    Expense:
+      allOf:
+        - $ref: '#/components/schemas/ExpensePreview'
+        - type: object
+          required: [id, householdId, payerDisplayName, createdByDisplayName, createdAt, splitInput, revision, updatedAt, canEdit, canVoid, voidedAt, voidedByDisplayName, voidReason]
+          properties:
+            id: { type: string, format: uuid }
+            householdId: { type: string, format: uuid }
+            payerDisplayName: { type: string }
+            createdByDisplayName: { type: string }
+            createdAt: { type: string, format: date-time }
+            splitInput: { $ref: '#/components/schemas/ExpenseSplit' }
+            revision: { type: integer, minimum: 1 }
+            updatedAt: { type: string, format: date-time }
+            canEdit: { type: boolean }
+            canVoid: { type: boolean }
+            voidedAt: { type: [string, 'null'], format: date-time }
+            voidedByDisplayName: { type: [string, 'null'] }
+            voidReason: { type: [string, 'null'] }
+    ExpenseEditDraft:
+      type: object
+      additionalProperties: false
+      required: [title, amountMinor, currency, spentOn, payerMemberId, split, expectedRevision]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        amountMinor: { type: integer, minimum: 1, maximum: 999999999999 }
+        currency: { type: string, enum: [USD, THB] }
+        spentOn: { type: string, format: date }
+        payerMemberId: { type: string, format: uuid }
+        split: { $ref: '#/components/schemas/ExpenseSplit' }
+        expectedRevision: { type: integer, minimum: 1 }
+    ExpenseEditConfirm:
+      type: object
+      additionalProperties: false
+      required: [title, amountMinor, currency, spentOn, payerMemberId, split, expectedRevision, previewId, idempotencyKey]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 160 }
+        amountMinor: { type: integer, minimum: 1, maximum: 999999999999 }
+        currency: { type: string, enum: [USD, THB] }
+        spentOn: { type: string, format: date }
+        payerMemberId: { type: string, format: uuid }
+        split: { $ref: '#/components/schemas/ExpenseSplit' }
+        expectedRevision: { type: integer, minimum: 1 }
+        previewId: { type: string, format: uuid }
+        idempotencyKey: { type: string, format: uuid }
+    ExpenseEditPreview:
+      allOf:
+        - $ref: '#/components/schemas/ExpensePreview'
+        - type: object
+          required: [expectedRevision, previewId, expiresAt]
+          properties:
+            expectedRevision: { type: integer, minimum: 1 }
+            previewId: { type: string, format: uuid }
+            expiresAt: { type: string, format: date-time }
+    FinancialHistoryPage:
+      type: object
+      required: [events, hasMore]
+      properties:
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/FinancialHistoryEvent' }
+        hasMore: { type: boolean }
+    FinancialHistoryEvent:
+      type: object
+      required: [id, kind, occurredAt, actorDisplayName, changes]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [created, edited, voided, status_changed] }
+        occurredAt: { type: string, format: date-time }
+        actorDisplayName: { type: string }
+        changes:
+          type: array
+          items:
+            type: object
+            required: [field, label, before, after]
+            properties:
+              field: { type: string }
+              label: { type: string }
+              before: { type: [string, 'null'] }
+              after: { type: [string, 'null'] }
+    VoidDraft:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision: { type: integer, minimum: 1 }
+        reason: { type: string, maxLength: 500 }
+    VoidConfirm:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, previewId, idempotencyKey]
+      properties:
+        expectedRevision: { type: integer, minimum: 1 }
+        reason: { type: string, maxLength: 500 }
+        previewId: { type: string, format: uuid }
+        idempotencyKey: { type: string, format: uuid }
+    VoidPreview:
+      type: object
+      required: [recordId, title, amountMinor, currency, expectedRevision, reason, balanceEffects, pendingBillCountBefore, pendingBillCountAfter, pendingBillAmountMinorBefore, pendingBillAmountMinorAfter, previewId, expiresAt]
+      properties:
+        recordId: { type: string, format: uuid }
+        title: { type: string }
+        amountMinor: { type: integer }
+        currency: { type: string, enum: [USD, THB] }
+        expectedRevision: { type: integer, minimum: 1 }
+        reason: { type: [string, 'null'] }
+        balanceEffects:
+          type: array
+          items:
+            type: object
+            required: [memberId, displayName, beforeMinor, changeMinor, afterMinor]
+            properties:
+              memberId: { type: string, format: uuid }
+              displayName: { type: string }
+              beforeMinor: { type: integer }
+              changeMinor: { type: integer }
+              afterMinor: { type: integer }
+        pendingBillCountBefore: { type: integer }
+        pendingBillCountAfter: { type: integer }
+        pendingBillAmountMinorBefore: { type: integer }
+        pendingBillAmountMinorAfter: { type: integer }
+        previewId: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+    User:
+      type: object
+      required: [id, email, displayName]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: [string, 'null']
+        displayName:
+          type: string
+    Household:
+      type: object
+      required: [id, name, defaultCurrency, timezone, role, currencyEditable, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        defaultCurrency:
+          type: string
+          enum: [USD, THB]
+        timezone:
+          type: string
+        role:
+          type: string
+          enum: [owner, admin, member]
+        currencyEditable:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+    Member:
+      type: object
+      required: [id, displayName, email, role, joinedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        email:
+          type: [string, 'null']
+        role:
+          type: string
+          enum: [owner, admin, member]
+        joinedAt:
+          type: string
+          format: date-time
+    Invite:
+      type: object
+      required: [id, createdAt, expiresAt, redeemedAt, revokedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        redeemedAt:
+          type: [string, 'null']
+          format: date-time
+        revokedAt:
+          type: [string, 'null']
+          format: date-time
+    InvitePreview:
+      type: object
+      required: [householdId, householdName, expiresAt]
+      properties:
+        householdId:
+          type: string
+          format: uuid
+        householdName:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
