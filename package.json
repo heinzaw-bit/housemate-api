@@ -21,6 +21,9 @@
     "migrate:notifications": "node --env-file=.env scripts/apply-notifications-migration.mjs",
     "push:keys": "node scripts/generate-push-keys.mjs",
     "cron:secret": "node scripts/generate-cron-secret.mjs",
+    "scheduler:plan": "node scripts/external-scheduler.mjs plan",
+    "scheduler:configure": "node scripts/external-scheduler.mjs configure",
+    "scheduler:status": "node scripts/external-scheduler.mjs status",
     "smoke:notifications": "npm run build && node --env-file=.env scripts/smoke-notifications.mjs",
     "smoke:dashboard": "npm run build && node --env-file=.env scripts/smoke-dashboard.mjs",
     "smoke:meals": "npm run build && node --env-file=.env scripts/smoke-meals.mjs",
@@ -38,7 +41,7 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check src tests",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/*.test.js"
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/*.test.js && node --test tests/external-scheduler.test.mjs"
   },
   "type": "module",
   "dependencies": {

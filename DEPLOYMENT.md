@@ -54,12 +54,39 @@ For example, [cron-job.org](https://cron-job.org/en/) supports minute schedules 
 3. URL: `https://ACTUAL-API-DOMAIN/internal/notifications/run` using the stable production API domain.
 4. Method: **GET**. Schedule: **every minute**.
 5. Add custom header **Authorization** with value **Bearer YOUR_PRIVATE_CRON_SECRET**. Use the same value as the API's environment variable, with a space after Bearer. Do not put the secret into the job URL.
-6. Enable failure notifications in the scheduler and run its test request. Expect HTTP 200 with `{"status":"ok"}`; no private household content is returned.
+6. Enable account-email notifications on the first failure, recovery after a failure, and automatic disablement. Run its test request. Expect HTTP 200 with `{"status":"ok"}`; no private household content is returned. Keep redirects classified as failures so a login/redirect page cannot pass a check.
 7. Verify several successful scheduled runs. A 401 means missing/mismatched job credentials. A 503 means a running/failed batch; inspect API logs and allow a later retry. A 404 means the wrong URL or old deployment.
 
 Production API access must reach the app's own authorization checks. If Vercel Deployment Protection intercepts requests with its login page, configure the production API to be reachable by your web client and scheduler. Do not substitute a member access token for the job secret. Rotating CRON_SECRET requires updating both Vercel (and redeploying) and the scheduler.
 
 cron-job.org waits up to 30 seconds. The Vercel ceiling is a recovery limit, not a promise of a 30-second batch. Current live push is disabled, so jobs generate in-app reminders only. Once push is configured or the household workload grows, monitor job duration and queue backlog; choose a scheduler with a longer timeout if needed. Existing queue leases and deterministic keys permit retries, but provider acceptance/device delivery are not exactly once.
+
+### Repeatable setup and status commands
+
+Create and verify a cron-job.org account, then generate an API key in its Settings. Save it privately in the API directory's ignored `.env.scheduler`:
+
+```dotenv
+CRON_JOB_API_KEY=your-private-scheduler-api-key
+REMINDER_API_ORIGIN=https://your-actual-api-domain.vercel.app
+REMINDER_TIMEZONE=Asia/Bangkok
+```
+
+Use the same production CRON_SECRET that is already in ignored `.env.vercel` (or provide it through the process environment). The setup command stores that job secret as the scheduler's request Authorization header; it never transfers database credentials. The scheduler API key stays local and is used only to authenticate requests to `https://api.cron-job.org`. Do not commit either file or paste credentials into chat.
+
+From the API directory:
+
+```powershell
+npm run scheduler:plan       # redacted configuration preview; no network writes
+npm run scheduler:configure  # test endpoint, create/update one job, verify, enable
+npm run scheduler:status     # read-only configuration/freshness check
+npm run scheduler:status -- --history # include recent status and duration, no headers/body
+```
+
+Configuration uses the exact production job URL, every minute with no expiry, GET, a 30-second timeout, and account-email alerts on failure/recovery/automatic disablement. It finds an existing job by URL before creating one, stops on duplicate or incomplete inventory, and verifies saved authorization/settings before enabling. A lost setup response can be retried with the same configure command, which discovers any already-created job. It records only public job metadata in ignored `.run/external-scheduler.json`. Reconfiguration temporarily disables that job while checking its saved settings.
+
+The status command never invokes the worker. It returns sanitized JSON and exits nonzero for failures, disabled jobs, configuration drift, or no completed execution within three minutes. With `--history`, it includes recent HTTP codes and durations. Keep these checks hourly: the provider's default management API quota is 100 requests/day, and status uses two requests (three with history). Scheduled executions have a separate quota from management requests. Native scheduler email alerts continue when Codex or this computer is closed; any local Codex follow-up is supplemental.
+
+Failure handling: 401 usually means a rotated/mismatched CRON_SECRET; 404 means the wrong domain/path/deployment; 503 may be a busy or failed worker; timeouts require checking duration and API/database logs. Inspect the job's history and Vercel logs privately. Do not repeatedly trigger manual jobs while a scheduled job is already running. After a secret rotation, privately update both the API environment (then redeploy) and scheduler header. After automatic disablement, fix the cause before re-enabling. Validate several actual scheduled 200 runs; a local direct test alone does not verify the external scheduler or email delivery.
 
 ## 5. Acceptance
 
