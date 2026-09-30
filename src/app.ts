@@ -6,4 +6,8 @@ import { createRuntime } from './runtime.js';
 const config = loadConfig();
 // The detected entry point must import Fastify directly for Vercel's builder.
 const { app } = createRuntime(config, Fastify);
-await app.listen({ port: config.port, host: '0.0.0.0' });
+// Vercel intercepts listen(); do not block module loading on that promise.
+app.listen({ port: config.port, host: '0.0.0.0' }).catch(() => {
+  app.log.error('API startup failed.');
+  process.exitCode = 1;
+});

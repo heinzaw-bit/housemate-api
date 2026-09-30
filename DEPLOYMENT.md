@@ -31,7 +31,7 @@ Vercel database connections verify the server certificate and hostname. The user
 
 Vercel supplies `VERCEL=1`; do not set it locally. On Vercel the API refuses startup without CRON_SECRET and explicit WEB_ORIGINS. Keep API and web configuration scoped to their respective projects. Browser variables never include database/job/VAPID private credentials. Leave VAPID configuration unset while no real public contact is available.
 
-6. Click **Deploy** and copy the stable production API domain from Vercel. Do not assume the chosen project name guarantees a particular domain.
+6. Click **Deploy** and copy the stable production API domain from Vercel. Do not assume the chosen project name guarantees a particular domain. The entry point starts `listen()` without top-level `await`, so Vercel can finish loading the module before its intercepted listener resolves.
 7. Open `https://ACTUAL-API-DOMAIN/health`. Expect `{"status":"ok"}`. This checks startup only, not database/auth access. Opening `/internal/notifications/run` without its private header must return 401.
 
 ## 3. Import the web app and finish origin configuration
