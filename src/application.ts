@@ -58,6 +58,8 @@ interface AppDependencies {
   notifications?: NotificationRepository;
   pushConfig?: PushConfig;
   webOrigins?: string[];
+  readiness?: () => Promise<void>;
+  reportError?: (error: unknown, operation: string) => Promise<void>;
 }
 
 const errorResponse = {
@@ -203,6 +205,8 @@ export function createApp({
   notifications,
   pushConfig = { enabled: false, publicKey: null, reason: 'server_setup' },
   webOrigins = ['http://localhost:3000'],
+  readiness,
+  reportError = async () => {},
 }: AppDependencies) {
   // Invite tokens travel in route paths. Do not write request URLs to logs.
   const app = fastifyFactory({
@@ -221,8 +225,10 @@ export function createApp({
     pushConfig,
   );
 
-  app.setErrorHandler((error, request, reply) => {
+  app.setErrorHandler(async (error, request, reply) => {
     if (error instanceof ApiError) {
+      if (error.statusCode >= 500)
+        await reportError(error, 'api.request').catch(() => {});
       return reply
         .status(error.statusCode)
         .send({ error: { code: error.code, message: error.message } });
@@ -237,7 +243,8 @@ export function createApp({
         error: { code: 'VALIDATION_ERROR', message: 'Invalid request.' },
       });
     }
-    request.log.error({ err: error }, 'request failed');
+    request.log.error('Unexpected API request failure.');
+    await reportError(error, 'api.request').catch(() => {});
     return reply.status(500).send({
       error: {
         code: 'INTERNAL_ERROR',
@@ -247,6 +254,17 @@ export function createApp({
   });
 
   app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/health/ready', async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    try {
+      if (!readiness) throw new Error('Readiness is not configured');
+      await readiness();
+      return { status: 'ok' };
+    } catch (error) {
+      await reportError(error, 'api.readiness').catch(() => {});
+      return reply.code(503).send({ status: 'unavailable' });
+    }
+  });
 
   app.get('/v1/me', async (request) => {
     const user = await requireUser(request, auth);

@@ -24,6 +24,10 @@ export function registerNotificationJob(
   app: FastifyInstance,
   secret: string | null,
   run: () => Promise<boolean>,
+  reportError: (
+    error: unknown,
+    operation: string,
+  ) => Promise<void> = async () => {},
 ) {
   const expected = secret
     ? createHash('sha256').update(`Bearer ${secret}`).digest()
@@ -51,9 +55,10 @@ export function registerNotificationJob(
           });
       }
       return { status: 'ok' };
-    } catch {
+    } catch (error) {
       // Database/provider errors may contain private connection details.
       request.log.error('Scheduled notification job failed.');
+      await reportError(error, 'api.notifications').catch(() => {});
       return reply.code(503).send({
         error: {
           code: 'JOB_FAILED',

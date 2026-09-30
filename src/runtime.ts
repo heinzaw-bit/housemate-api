@@ -8,6 +8,7 @@ import { PgChoreRepository } from './chores.js';
 import type { Config } from './config.js';
 import { PgDashboardRepository } from './dashboard.js';
 import { databasePoolOptions } from './database.js';
+import { initializeErrorReporting, reportError } from './error-reporting.js';
 import { PgEventRepository } from './events.js';
 import { PgExpenseRepository } from './expenses.js';
 import { PgHouseActionRepository } from './house-actions.js';
@@ -24,6 +25,7 @@ import { PgPollRepository } from './polls.js';
 import { PgShoppingRepository } from './shopping.js';
 
 export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
+  initializeErrorReporting();
   const pool = new pg.Pool(databasePoolOptions(config));
   const pushConfig: PushConfig = {
     enabled: !!config.vapid,
@@ -56,14 +58,27 @@ export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
     notifications: new PgNotificationRepository(pool, pushConfig),
     pushConfig,
     webOrigins: config.webOrigins,
+    reportError,
+    readiness: async () => {
+      const query = { text: 'SELECT 1', query_timeout: 5000 };
+      await pool.query(query);
+    },
   });
 
   const runner = createNotificationRunner(() => worker.tick());
-  registerNotificationJob(app, config.cronSecret, () => runner.run());
+  registerNotificationJob(
+    app,
+    config.cronSecret,
+    () => runner.run(),
+    reportError,
+  );
   app.addHook('onClose', async () => {
     await runner.drain();
     await pool.end();
   });
-  pool.on('error', () => app.log.error('Idle database connection failed.'));
+  pool.on('error', (error) => {
+    app.log.error('Idle database connection failed.');
+    void reportError(error, 'api.database');
+  });
   return { app, runner };
 }

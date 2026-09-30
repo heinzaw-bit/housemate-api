@@ -105,7 +105,9 @@ export function configurationMatches(actual, expected, compareSecret = false) {
     return false;
   if (
     !scheduleFields.every(
-      (key) => JSON.stringify(actual.schedule[key]) === '[-1]',
+      (key) =>
+        JSON.stringify(actual.schedule[key]) ===
+        JSON.stringify(expected.schedule[key]),
     )
   )
     return false;
@@ -120,6 +122,11 @@ export function configurationMatches(actual, expected, compareSecret = false) {
   )
     return false;
   const authorization = actual.extendedData?.headers?.Authorization;
+  if (!expected.extendedData.headers.Authorization)
+    return (
+      !authorization &&
+      Object.keys(actual.extendedData?.headers ?? {}).length === 0
+    );
   return compareSecret
     ? authorization === expected.extendedData.headers.Authorization
     : typeof authorization === 'string' && authorization.startsWith('Bearer ');
@@ -160,7 +167,7 @@ export function createProviderClient(apiKey, fetcher = fetch) {
   };
 }
 
-export async function findJob(request, url) {
+export async function findJob(request, url, expectedTitle = title) {
   const inventory = await request('/jobs');
   if (inventory.someFailed !== false || !Array.isArray(inventory.jobs))
     throw new Error(
@@ -171,7 +178,10 @@ export async function findJob(request, url) {
     throw new Error(
       'More than one reminder job exists for this URL. Resolve duplicate jobs in the scheduler console.',
     );
-  if (!matches.length && inventory.jobs.some((job) => job.title === title))
+  if (
+    !matches.length &&
+    inventory.jobs.some((job) => job.title === expectedTitle)
+  )
     throw new Error(
       'A HouseMate job exists with a different URL. Review it in the scheduler console first.',
     );
@@ -184,7 +194,7 @@ export async function findJob(request, url) {
 }
 
 export async function configureJob(request, expected) {
-  let jobId = await findJob(request, expected.url);
+  let jobId = await findJob(request, expected.url, expected.title);
   if (jobId) {
     await request(`/jobs/${jobId}`, 'PATCH', { job: expected });
   } else {

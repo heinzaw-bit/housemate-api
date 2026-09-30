@@ -41,11 +41,17 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check src tests",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/*.test.js && node --test tests/external-scheduler.test.mjs"
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/tests/*.test.js && node --test tests/*.test.mjs",
+    "uptime:plan": "node scripts/uptime.mjs plan",
+    "uptime:configure": "node scripts/uptime.mjs configure",
+    "uptime:status": "node scripts/uptime.mjs status",
+    "backup:create": "npm run build && node scripts/backup.mjs create",
+    "backup:drill": "npm run build && node scripts/backup.mjs drill"
   },
   "type": "module",
   "dependencies": {
     "@fastify/cors": "11.3.0",
+    "@sentry/node": "11.1.0",
     "fastify": "5.12.5",
     "pg": "8.23.0",
     "web-push": "3.6.7"

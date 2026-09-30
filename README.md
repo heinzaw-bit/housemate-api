@@ -81,6 +81,13 @@ Any active member can add, edit, assign, cancel, or purchase an open shopping it
 
 ## Contract and deployment
 
+See [production operations](OPERATIONS.md) for Sentry setup, public database
+readiness, uptime alerts, encrypted backups, tested isolated restore drills and
+the new-project recovery runbook. `npm run uptime:plan|uptime:configure|uptime:status`
+manages public HTTP checks; `npm run backup:create` and `npm run backup:drill -- <file>`
+never restore into production. Offsite backup storage/scheduling and live Sentry
+activation require operator configuration.
+
 `openapi.yaml` describes the implemented endpoints. Clients should pin a compatible contract version. Production deployments must set `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY`, terminate TLS at the edge, and allow the API to reach Supabase Auth and PostgreSQL. Never expose the database connection URL or an administrative key to a client.
 
 See [manual Vercel deployment](DEPLOYMENT.md) for the prepared Fastify entry point, verified database TLS, required `CRON_SECRET`, and Hobby-compatible external notification scheduling. `src/application.ts` is the injectable route factory; `src/runtime.ts` wires production dependencies; `src/app.ts` is Vercel's detected server entry point; `src/main.ts` retains local/persistent-host startup. Vercel does not run a background interval. Its warm instances share a module-level pool capped at one connection, with a five-second connection timeout and verified TLS. The user's public Supabase CA is bundled in `src/supabase-ca.ts` alongside the standard trusted roots, so the current pooler needs no extra CA environment variable. Optional `DATABASE_SSL_CA` overrides the trust bundle for a future/custom host. URL SSL flags cannot disable verification. Neither entry point runs database migrations.

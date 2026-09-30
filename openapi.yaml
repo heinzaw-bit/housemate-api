@@ -436,6 +436,30 @@ paths:
                   status:
                     type: string
                     const: ok
+  /health/ready:
+    get:
+      security: []
+      summary: Database readiness check
+      description: Public bounded SELECT 1 check. No household reads, credentials or dependency details are returned. Cache-Control is no-store.
+      responses:
+        '200':
+          description: API can query its database
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+        '503':
+          description: Database unavailable or readiness unconfigured
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: unavailable }
   /v1/households/{id}/dashboard:
     get:
       summary: Read the household home dashboard from a consistent snapshot
