@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createApp } from '../src/app.js';
+import { createApp } from '../src/application.js';
 import { ApiError } from '../src/errors.js';
 import type { ShoppingItem, ShoppingRepository } from '../src/shopping.js';
 import type { HouseholdRepository } from '../src/types.js';

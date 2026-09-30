@@ -8,6 +8,28 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /internal/notifications/run:
+    get:
+      summary: Run one notification reminder and delivery batch
+      description: Server scheduler only. Requires the API's private CRON_SECRET as a Bearer credential, not a member JWT. Generates reminders using existing recipient rules and processes the existing leased delivery queue. The response contains no household data. Missing configuration or invalid credentials fail closed. Calls never run migrations. Repeated runs use deterministic reminder keys and atomic delivery leases; provider delivery is not exactly once.
+      security:
+        - schedulerAuth: []
+      responses:
+        '200':
+          description: Batch completed; includes Cache-Control no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503':
+          description: JOB_BUSY with Retry-After 60 for an overlapping run on the same instance, or JOB_FAILED for a sanitized worker error. Scheduler may retry later.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
   /v1/households/{id}/notifications:
     get:
       summary: Read the caller's personal notification feed
@@ -1802,6 +1824,10 @@ components:
         type: string
         description: 43-character base64url bearer token from a shareable invite link.
   securitySchemes:
+    schedulerAuth:
+      type: http
+      scheme: bearer
+      description: Private server CRON_SECRET, 32–256 URL-safe characters; never a client/member token.
     bearerAuth:
       type: http
       scheme: bearer

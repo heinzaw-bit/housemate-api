@@ -5,10 +5,21 @@ export interface Config {
   supabaseUrl: string;
   supabasePublishableKey: string;
   webOrigins: string[];
+  serverless: boolean;
+  cronSecret: string | null;
+  databaseSslCa: string | undefined;
   vapid: { subject: string; publicKey: string; privateKey: string } | null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const serverless = env.VERCEL === '1';
+  const cronSecret = env.CRON_SECRET || null;
+  if (cronSecret && !/^[A-Za-z0-9_-]{32,256}$/.test(cronSecret)) {
+    throw new Error('CRON_SECRET must contain 32–256 URL-safe characters');
+  }
+  if (serverless && !cronSecret) {
+    throw new Error('CRON_SECRET is required on Vercel');
+  }
   const databaseUrl = requireValue(env.DATABASE_URL, 'DATABASE_URL');
   const supabaseUrl = requireValue(env.SUPABASE_URL, 'SUPABASE_URL');
   const supabasePublishableKey = requireValue(
@@ -30,7 +41,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   ) {
     throw new Error('SUPABASE_URL must use HTTPS outside localhost');
   }
-  const webOrigins = (env.WEB_ORIGINS ?? 'http://localhost:3000')
+  const webOrigins = (
+    serverless
+      ? requireValue(env.WEB_ORIGINS, 'WEB_ORIGINS')
+      : (env.WEB_ORIGINS ?? 'http://localhost:3000')
+  )
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
@@ -61,6 +76,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     supabaseUrl: url.origin,
     supabasePublishableKey,
     webOrigins,
+    serverless,
+    cronSecret,
+    databaseSslCa: env.DATABASE_SSL_CA || undefined,
     vapid:
       env.VAPID_SUBJECT && env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY
         ? validatedVapid(

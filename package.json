@@ -20,6 +20,7 @@
     "migrate:announcements-polls": "node --env-file=.env scripts/apply-announcements-polls-migration.mjs",
     "migrate:notifications": "node --env-file=.env scripts/apply-notifications-migration.mjs",
     "push:keys": "node scripts/generate-push-keys.mjs",
+    "cron:secret": "node scripts/generate-cron-secret.mjs",
     "smoke:notifications": "npm run build && node --env-file=.env scripts/smoke-notifications.mjs",
     "smoke:dashboard": "npm run build && node --env-file=.env scripts/smoke-dashboard.mjs",
     "smoke:meals": "npm run build && node --env-file=.env scripts/smoke-meals.mjs",

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createApp } from '../src/app.js';
+import { createApp } from '../src/application.js';
 import { calculateShares } from '../src/expense-calculation.js';
 import type { ExpenseDraft, ExpenseRepository } from '../src/expense-types.js';
 import type { HouseholdRepository } from '../src/types.js';

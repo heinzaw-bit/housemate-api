@@ -4,7 +4,7 @@ import type {
   Announcement,
   AnnouncementRepository,
 } from '../src/announcements.js';
-import { createApp } from '../src/app.js';
+import { createApp } from '../src/application.js';
 import { ApiError } from '../src/errors.js';
 import {
   normalizedPollOptions,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createApp } from '../src/app.js';
+import { createApp } from '../src/application.js';
 import { calculateBill } from '../src/bill-calculation.js';
 import type { BillDraft, BillRepository } from '../src/bill-types.js';
 import type { HouseholdRepository } from '../src/types.js';
