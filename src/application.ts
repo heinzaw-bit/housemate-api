@@ -41,6 +41,7 @@ import type {
 } from './types.js';
 
 interface AppDependencies {
+  fastifyFactory?: typeof Fastify;
   auth: AuthVerifier;
   households: HouseholdRepository;
   expenses?: ExpenseRepository;
@@ -185,6 +186,7 @@ function validTimeZone(value: string): boolean {
 }
 
 export function createApp({
+  fastifyFactory = Fastify,
   auth,
   households,
   expenses,
@@ -203,7 +205,7 @@ export function createApp({
   webOrigins = ['http://localhost:3000'],
 }: AppDependencies) {
   // Invite tokens travel in route paths. Do not write request URLs to logs.
-  const app = Fastify({
+  const app = fastifyFactory({
     logger: true,
     logController: new LogController({ disableRequestLogging: true }),
   });

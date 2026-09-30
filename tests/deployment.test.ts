@@ -152,7 +152,7 @@ test('overlapping jobs do not report false success and a failed batch can be ret
 });
 
 test('production runtime boots health and rejects unauthorized jobs without opening database connections', async () => {
-  const { app } = createRuntime(loadConfig(vercelEnv));
+  const { app } = createRuntime(loadConfig(vercelEnv), Fastify);
   try {
     assert.equal((await app.inject('/health')).statusCode, 200);
     assert.equal(

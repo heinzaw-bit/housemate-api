@@ -1,3 +1,4 @@
+import type Fastify from 'fastify';
 import pg from 'pg';
 import { PgAnnouncementRepository } from './announcements.js';
 import { createApp } from './application.js';
@@ -22,7 +23,7 @@ import { PgNotificationRepository, type PushConfig } from './notifications.js';
 import { PgPollRepository } from './polls.js';
 import { PgShoppingRepository } from './shopping.js';
 
-export function createRuntime(config: Config) {
+export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
   const pool = new pg.Pool(databasePoolOptions(config));
   const pushConfig: PushConfig = {
     enabled: !!config.vapid,
@@ -35,6 +36,7 @@ export function createRuntime(config: Config) {
     pushConfig.publicKey,
   );
   const app = createApp({
+    fastifyFactory,
     auth: createSupabaseAuthVerifier(
       config.supabaseUrl,
       config.supabasePublishableKey,
