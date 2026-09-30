@@ -1,5 +1,26 @@
 # Production operations
 
+## Verified state — 2026-10-01 (Asia/Bangkok)
+
+- Production API and web Sentry variables are configured and deployed. Both
+  projects accepted a synthetic redacted event with HTTP 200. Deployed browser
+  assets contain the web DSN and privacy filter. A real browser crash and Sentry
+  owner email delivery have not been exercised; enable issue/regression alerts.
+- cron-job.org uptime jobs **8546966** (API) and **8546967** (web) run every five
+  minutes. Their initial executions at 01:35:02 returned HTTP 200 in 208 ms and
+  434 ms. Failure/recovery email settings are verified, actual delivery is not.
+- An encrypted production backup was created at 00:46:40. The isolated custom
+  archive restore completed at 00:51:58 in 17 seconds: all 65 table counts/digests,
+  Auth references, RLS and three API/financial smoke checks passed. Production
+  was read only. Storage object count was zero.
+- The additional recovery-SQL phase below was added after that passing drill
+  and has **not** completed. Windows ACL tightening prevents the Codex sandbox
+  PostgreSQL process from accessing temporary drill files. Automatic approval
+  review rejected restoring inherited permissions; narrower access to temporary
+  restore folders awaits the user's approval. Key/backup ACLs remain restricted.
+- Offsite backup storage, unattended backups and a managed Supabase cutover
+  remain unconfigured or untested.
+
 ## Error reporting
 
 Create `housemate-api` (Node.js) and `housemate-web` (Next.js) projects in Sentry.
