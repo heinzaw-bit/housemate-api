@@ -4,7 +4,7 @@ import { PgAnnouncementRepository } from './announcements.js';
 import { createApp } from './application.js';
 import { HouseholdAssistant } from './assistant.js';
 import { PgAssistantBudget } from './assistant-budget.js';
-import { OpenAiAssistantProvider } from './assistant-provider.js';
+import { GeminiAssistantProvider } from './assistant-provider.js';
 import { createSupabaseAuthVerifier } from './auth.js';
 import { PgBillRepository } from './bills.js';
 import { PgChoreRepository } from './chores.js';
@@ -57,10 +57,7 @@ export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
         events: new PgEventRepository(pool),
       },
       config.assistant
-        ? new OpenAiAssistantProvider(
-            config.assistant.apiKey,
-            config.assistant.model,
-          )
+        ? new GeminiAssistantProvider(config.assistant.apiKey)
         : null,
       config.assistant ? new PgAssistantBudget(pool) : null,
     ),

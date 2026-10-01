@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createApp } from '../src/application.js';
 import { HouseholdAssistant } from '../src/assistant.js';
 import type { AssistantIntent } from '../src/assistant-provider.js';
-import { OpenAiAssistantProvider } from '../src/assistant-provider.js';
+import { GeminiAssistantProvider } from '../src/assistant-provider.js';
 import type { Chore } from '../src/chores.js';
 import type { Dashboard } from '../src/dashboard.js';
 import { ApiError } from '../src/errors.js';
@@ -97,6 +97,14 @@ function fixture(
   let accessCalls = 0;
   const data = {
     households: {
+      listMembers: async () =>
+        snapshot.balance.members.map((member) => ({
+          id: member.memberId,
+          displayName: member.displayName,
+          email: 'private@example.test',
+          role: 'member' as const,
+          joinedAt: household.createdAt,
+        })),
       get: async (user: string, selector: string) => {
         calls.push(`access:${user}:${selector}`);
         accessCalls++;
@@ -199,7 +207,8 @@ function fixture(
       method: 'POST',
       url: `/v1/households/${selector}/assistant/questions`,
       headers: auth,
-      payload: body,
+      payload:
+        'message' in body ? { privacyAcknowledged: true, ...body } : body,
     });
   return { app, assistant, calls, ask, data };
 }
@@ -239,7 +248,7 @@ test('assistant authorizes before spending, validates input, scopes membership a
     assert.ok(result.json().sources[0].href.includes(`household=${id}`));
     assert.deepEqual(
       f.calls.slice(1).map((call) => call.split(':')[0]),
-      ['access', 'budget', 'provider', 'dashboard', 'access'],
+      ['access', 'access', 'budget', 'provider', 'dashboard', 'access'],
     );
   } finally {
     await f.app.close();
@@ -296,7 +305,7 @@ test('duplicate names are clarified; unsupported writes never reach household se
     intent: { topic: 'unsupported', memberName: null, scope: null },
   });
   try {
-    const result = await ambiguous.ask({ message: 'Alex balance' });
+    const result = await ambiguous.ask({ message: 'balance' });
     assert.equal(result.json().kind, 'clarification');
     assert.equal(result.json().rows.length, 0);
     assert.match(result.json().text, /More than one/);
@@ -371,80 +380,82 @@ test('today follows household timezone rather than UTC; list caps are disclosed'
   }
 });
 
-test('OpenAI receives only the question and returns an allowlisted intent with storage disabled', async () => {
-  let payload: Record<string, unknown> | undefined;
-  const provider = new OpenAiAssistantProvider(
-    'test-only-token',
-    'gpt-4o-mini',
-    (async (_url, init) => {
-      payload = JSON.parse(String(init?.body));
-      assert.ok(init?.signal);
-      return Response.json({
-        status: 'completed',
-        output: [
-          {
-            type: 'message',
-            role: 'assistant',
-            content: [
-              {
-                type: 'output_text',
-                text: JSON.stringify({
-                  topic: 'balance',
-                  memberName: null,
-                  scope: null,
-                }),
-              },
-            ],
-          },
-        ],
-      });
-    }) as typeof fetch,
-  );
+function geminiResponse(text: string, finishReason = 'STOP') {
+  return Response.json({
+    candidates: [
+      { finishReason, content: { role: 'model', parts: [{ text }] } },
+    ],
+  });
+}
+test('Gemini gets only the general question, uses a fixed model and keeps the key in a header', async () => {
+  let payload: {
+    generationConfig?: {
+      maxOutputTokens: number;
+      candidateCount: number;
+      responseJsonSchema: { required: string[] };
+    };
+    contents?: unknown;
+    tools?: unknown;
+  } = {};
+  const provider = new GeminiAssistantProvider('test-only-token', (async (
+    url,
+    init,
+  ) => {
+    assert.equal(
+      url,
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent',
+    );
+    assert.equal(
+      new Headers(init?.headers).get('x-goog-api-key'),
+      'test-only-token',
+    );
+    assert.ok(init?.signal);
+    payload = JSON.parse(String(init?.body));
+    return geminiResponse(JSON.stringify({ topic: 'balance', scope: null }));
+  }) as typeof fetch);
   assert.deepEqual(await provider.classify('How much do I owe?'), {
     topic: 'balance',
     memberName: null,
     scope: null,
   });
-  assert.equal(payload?.store, false);
-  assert.equal(payload?.max_output_tokens, 400);
-  assert.deepEqual(payload?.input, [
-    { role: 'user', content: 'How much do I owe?' },
+  assert.equal(payload.generationConfig?.maxOutputTokens, 400);
+  assert.equal(payload.generationConfig?.candidateCount, 1);
+  assert.deepEqual(payload.generationConfig?.responseJsonSchema.required, [
+    'topic',
+    'scope',
+  ]);
+  assert.deepEqual(payload.contents, [
+    { role: 'user', parts: [{ text: 'How much do I owe?' }] },
   ]);
   assert.ok(!JSON.stringify(payload).includes(household.name));
+  assert.equal(payload.tools, undefined);
 });
-
-test('provider refusals, malformed JSON, incomplete output and errors fail safely without retry', async () => {
+test('blocked, incomplete, untrusted and failed Gemini replies are sanitized without retries', async () => {
   const responses = [
-    new Response('private provider error with test-only-token', {
-      status: 401,
-    }),
-    Response.json({ status: 'incomplete', output: [] }),
+    new Response('private provider error test-only-token', { status: 401 }),
+    Response.json({ promptFeedback: { blockReason: 'SAFETY' } }),
+    geminiResponse('{}', 'MAX_TOKENS'),
+    geminiResponse('{bad'),
+    geminiResponse(
+      JSON.stringify({ topic: 'balance', scope: null, memberName: 'Alex' }),
+    ),
+    geminiResponse(JSON.stringify({ topic: 'balance', scope: 'today' })),
     Response.json({
-      status: 'completed',
-      output: [
+      candidates: [
         {
-          type: 'message',
-          role: 'assistant',
-          content: [{ type: 'refusal', text: 'No' }],
-        },
-      ],
-    }),
-    Response.json({
-      status: 'completed',
-      output: [
-        {
-          type: 'message',
-          role: 'assistant',
-          content: [{ type: 'output_text', text: '{bad' }],
+          finishReason: 'STOP',
+          content: {
+            role: 'model',
+            parts: [{ functionCall: { name: 'delete' } }],
+          },
         },
       ],
     }),
   ];
   for (const response of responses) {
     let calls = 0;
-    const provider = new OpenAiAssistantProvider(
+    const provider = new GeminiAssistantProvider(
       'test-only-token',
-      'model',
       (async () => {
         calls++;
         return response;
@@ -459,5 +470,49 @@ test('provider refusals, malformed JSON, incomplete output and errors fail safel
         !error.message.includes('private question'),
     );
     assert.equal(calls, 1);
+  }
+  let calls = 0;
+  const limited = new GeminiAssistantProvider('test-only-token', (async () => {
+    calls++;
+    return new Response('private quota body', { status: 429 });
+  }) as typeof fetch);
+  await assert.rejects(
+    () => limited.classify('balance'),
+    (error: unknown) =>
+      error instanceof ApiError &&
+      error.statusCode === 429 &&
+      error.code === 'AI_PROVIDER_LIMIT_REACHED',
+  );
+  assert.equal(calls, 1);
+});
+test('privacy acknowledgement and private-input checks run before budget or Gemini', async () => {
+  const f = fixture();
+  try {
+    const consent = await f.ask({
+      message: 'balance',
+      privacyAcknowledged: undefined,
+    });
+    assert.equal(consent.statusCode, 400);
+    assert.equal(consent.json().error.code, 'ASSISTANT_PRIVACY_REQUIRED');
+    for (const message of [
+      'aLeX balance',
+      'private@example.test',
+      'I owe 100 baht',
+      'https://example.test',
+      'my password is private',
+      'my API key is private',
+    ]) {
+      const result = await f.ask({ message });
+      assert.equal(result.statusCode, 400);
+      assert.equal(result.json().error.code, 'ASSISTANT_PRIVATE_INPUT');
+    }
+    assert.ok(
+      !f.calls.some(
+        (call) => call.startsWith('budget:') || call.startsWith('provider:'),
+      ),
+    );
+    assert.equal((await f.ask({ topic: 'balance' })).statusCode, 200);
+  } finally {
+    await f.app.close();
   }
 });

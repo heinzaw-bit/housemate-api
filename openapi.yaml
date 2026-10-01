@@ -20,15 +20,17 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [naturalLanguageEnabled]
+                required: [naturalLanguageEnabled, provider, requiresPrivacyAcknowledgement]
                 properties:
                   naturalLanguageEnabled: { type: boolean }
+                  provider: { type: [string, 'null'], enum: [gemini, null] }
+                  requiresPrivacyAcknowledgement: { type: boolean }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
   /v1/households/{id}/assistant/questions:
     post:
       summary: Answer a read-only household question from authorized API services
-      description: Choose a quick topic OR send a message (1–1000 characters). Natural-language classification requires server-only OpenAI configuration and a durable budget (20 requests per account per hour, 200 globally per UTC day). No household records are mutated. The model only classifies intent; the API generates answers and amounts. Ambiguous, unsupported, or mutation requests receive clarification. No conversation history is stored or sent. Private answers are never cached. Lists are bounded and disclose truncation. Bills report provider payment status, not individual member bill payments.
+      description: Choose a quick topic OR send a general question (1–1000 characters). Gemini free-tier classification requires server-only configuration and privacyAcknowledged true. The member acknowledges Google's unpaid-tier data use and that the question contains no personal/confidential information. The API rejects recognized active member names/emails, digits, links and credential markers before provider use; this guard is not a comprehensive personal-data detector. Named member questions belong in Money. Only the question is sent; no household records, member lists, financial results or conversation history are sent or saved by HouseMate. The model only classifies intent; the API generates answers and amounts. No household records are mutated. Durable limits are 20 attempts per account per UTC hour and 200 globally per UTC day. Upstream limits fail without retry or paid fallback. Private answers are never cached. Bounded lists disclose truncation. Bills report provider status, not individual member payments.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
       requestBody:
@@ -41,6 +43,7 @@ paths:
               properties:
                 topic: { type: string, enum: [summary, balance, bills, meals, chores, shopping, events] }
                 message: { type: string, minLength: 1, maxLength: 1000 }
+                privacyAcknowledged: { type: boolean, const: true, description: Required before any free-text question is sent to Gemini }
               oneOf:
                 - { required: [topic], not: { required: [message] } }
                 - { required: [message], not: { required: [topic] } }
@@ -81,7 +84,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
         '429':
-          description: AI_LIMIT_REACHED; wait for the next hourly or daily UTC budget window. Failed provider attempts consume a slot; requests are never automatically retried.
+          description: AI_LIMIT_REACHED (local budget) or AI_PROVIDER_LIMIT_REACHED (Gemini quota). Failed attempts consume a local slot; requests are never automatically retried. Quick topics stay available.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }

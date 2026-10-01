@@ -16,7 +16,7 @@ import type { ShoppingRepository } from './shopping.js';
 import type { AuthenticatedUser, HouseholdRepository } from './types.js';
 
 interface AssistantData {
-  households: Pick<HouseholdRepository, 'get'>;
+  households: Pick<HouseholdRepository, 'get' | 'listMembers'>;
   dashboard: DashboardRepository;
   shopping: Pick<ShoppingRepository, 'list'>;
   chores: Pick<ChoreRepository, 'list'>;
@@ -39,7 +39,7 @@ export interface AssistantAnswer {
 }
 export type AssistantQuestion =
   | { topic: AssistantTopic; message?: never }
-  | { message: string; topic?: never };
+  | { message: string; topic?: never; privacyAcknowledged?: true };
 
 export class HouseholdAssistant {
   constructor(
@@ -58,7 +58,12 @@ export class HouseholdAssistant {
 
   async config(userId: string, householdId: string) {
     await this.access(userId, householdId);
-    return { naturalLanguageEnabled: !!this.provider && !!this.budget };
+    const enabled = !!this.provider && !!this.budget;
+    return {
+      naturalLanguageEnabled: enabled,
+      provider: enabled ? 'gemini' : null,
+      requiresPrivacyAcknowledgement: true,
+    };
   }
 
   async ask(
@@ -78,10 +83,43 @@ export class HouseholdAssistant {
           'ASSISTANT_SETUP_REQUIRED',
           'Free-text questions are awaiting AI setup. Choose a quick question below.',
         );
-      await this.budget.consume(userId);
-      intent = validateAssistantIntent(
-        await this.provider.classify(question.message.trim()),
+      if (question.privacyAcknowledged !== true)
+        throw new ApiError(
+          400,
+          'ASSISTANT_PRIVACY_REQUIRED',
+          'Confirm the Gemini privacy notice before sending a general question.',
+        );
+      const message = question.message.trim();
+      const members = await this.data.households.listMembers(
+        userId,
+        householdId,
       );
+      const names = members
+        .flatMap((member) => [member.displayName, member.email])
+        .filter((name): name is string => !!name?.trim());
+      const mentionsMember = names.some((name) => {
+        const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(
+          `(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`,
+          'iu',
+        ).test(message);
+      });
+      // A limited guard, not a complete personal-information detector. Consent
+      // still requires members to keep unknown personal/confidential details out.
+      if (
+        mentionsMember ||
+        /[\p{N}@]|https?:|www\.|\b(password|secret|api[ _-]?key|token)\b/iu.test(
+          message,
+        )
+      )
+        throw new ApiError(
+          400,
+          'ASSISTANT_PRIVATE_INPUT',
+          'Keep names, amounts, contact details and secrets out of typed questions. Use a quick question or the Money and House pages for specific records.',
+        );
+      await this.access(userId, householdId);
+      await this.budget.consume(userId);
+      intent = validateAssistantIntent(await this.provider.classify(message));
     }
     const source = (label: string, path: string): Source => ({
       label,
@@ -405,6 +443,7 @@ export function registerAssistantRoutes(
           properties: {
             topic: { type: 'string', enum: assistantTopics },
             message: { type: 'string', minLength: 1, maxLength: 1000 },
+            privacyAcknowledged: { type: 'boolean', const: true },
           },
           oneOf: [
             { required: ['topic'], not: { required: ['message'] } },

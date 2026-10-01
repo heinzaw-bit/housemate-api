@@ -177,3 +177,26 @@ test('production runtime boots health and rejects unauthorized jobs without open
     await app.close();
   }
 });
+
+test('Gemini is enabled only with a private key and explicit free-tier confirmation', () => {
+  assert.equal(
+    loadConfig({ ...env, GEMINI_API_KEY: 'test-only' }).assistant,
+    null,
+  );
+  assert.equal(
+    loadConfig({ ...env, GEMINI_FREE_TIER_CONFIRMED: 'true' }).assistant,
+    null,
+  );
+  assert.equal(
+    loadConfig({ ...env, OPENAI_API_KEY: 'old-test-only' }).assistant,
+    null,
+  );
+  assert.deepEqual(
+    loadConfig({
+      ...env,
+      GEMINI_API_KEY: 'test-only',
+      GEMINI_FREE_TIER_CONFIRMED: 'true',
+    }).assistant,
+    { apiKey: 'test-only' },
+  );
+});

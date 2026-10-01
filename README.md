@@ -6,17 +6,21 @@ Shared product scope and engineering context live in the umbrella's [SPEC](https
 
 ## Implemented slice
 
-- `GET /v1/households/{id}/assistant` and `POST /assistant/questions` for authorized household Q&A. Quick topics work without AI configuration; optional free text classifies a question through OpenAI, then the API generates the answer using existing services. No assistant mutation endpoint exists.
+- `GET /v1/households/{id}/assistant` and `POST /assistant/questions` for authorized household Q&A. Quick topics work without AI configuration; optional free text classifies a question through Gemini, then the API generates the answer using existing services. No assistant mutation endpoint exists.
 
 ## Optional natural-language questions
 
 Quick household questions need no provider setup. For free text:
 
 1. Run `npm run migrate:assistant` once with the configured private database connection, then `npm run smoke:assistant`. The latter uses a rollback-only transaction and makes no provider requests.
-2. Save `OPENAI_API_KEY` in ignored API `.env` for local use, or as a **Sensitive, Production** variable on Vercel's **housemate-api** project. Never put it in the web project, a `NEXT_PUBLIC_` variable, Git, logs, or chat. Optional `OPENAI_MODEL` defaults to `gpt-4o-mini` and must support Responses structured outputs.
-3. Restart the local API or redeploy the API project. Check Assistant availability while signed in, then verify free-text balance and today/cooking questions against the source pages.
+2. In [Google AI Studio](https://aistudio.google.com/api-keys), create a key in a project whose Billing Tier is **Free Tier**, with billing disabled. Save `GEMINI_API_KEY` in ignored API `.env` locally, or as a **Sensitive, Production** variable on Vercel's **housemate-api** project. Never put it in the web project, `NEXT_PUBLIC_`, Git, logs or chat.
+3. After checking the Google project tier, set `GEMINI_FREE_TIER_CONFIRMED=true` on the API. This is an operator acknowledgement; HouseMate cannot verify Google's billing settings from a key. Keeping the Google project on Free Tier is what prevents paid usage. The fixed model is `gemini-3.1-flash-lite`; there is no retry or alternate paid provider/model.
+4. Restart the local API or redeploy the API project. While signed in, acknowledge the privacy notice and ask a general balance or today/cooking question; compare the answer with its source page. Named-member questions belong in Money.
 
-Only the question is sent to OpenAI. The API validates its allowlisted classification and builds answers from authorized services; no model-generated money or record links are used. HouseMate stores no prompts or conversation history, and sets `store: false` on provider requests (provider retention policy still applies). Requests have a 12-second provider timeout, 400 output-token cap, no automatic retry, 20 attempts per account per UTC hour, and 200 globally per UTC day. Failed/cancelled attempts can consume a slot. Private counters expire and are cleaned on the next AI request. Missing keys, provider errors, and exhausted budgets leave quick questions and manual flows available. Draft actions remain a later phase.
+Only a general question is sent to Gemini. The API validates its allowlisted classification and builds answers from authorized services; household records, member lists, balances and earlier answers never go to Google. HouseMate stores no prompts or conversation history. Google's [unpaid-service terms](https://ai.google.dev/gemini-api/terms) allow content use to improve products and human review, and prohibit submitting personal, sensitive or confidential information. The web requires an acknowledgement before sending; the API also rejects known active-member names/emails, digits, links and credential markers before spending budget. This limited guard is not a complete personal-information detector, so members must keep other private details out too. Quick questions use HouseMate directly and need no acknowledgement.
+
+Requests have a 12-second provider timeout, 400 output-token cap, no automatic retry, 20 attempts per account per UTC hour and 200 globally per UTC day. These are HouseMate limits, not a guarantee of Google's available free quota; provider 429 errors offer quick questions with no paid fallback. Failed/cancelled attempts can consume a slot. Private counters expire and are cleaned on the next AI request. Missing keys or free-tier confirmation, provider errors and exhausted budgets leave quick questions and manual flows available. Migration 016 is unchanged. Draft actions remain a later phase.
+
 ## Other implemented endpoints
 
 - Personal `GET /v1/households/{id}/notifications`, individual read and bounded read-all, and `GET`/`PUT /notification-preferences`. All feed and preference operations enforce active membership and caller ownership. Stable cursor pages preserve PostgreSQL timestamp precision.
