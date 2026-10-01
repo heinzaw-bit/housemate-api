@@ -6,6 +6,19 @@ Shared product scope and engineering context live in the umbrella's [SPEC](https
 
 ## Implemented slice
 
+- `GET /v1/households/{id}/assistant` and `POST /assistant/questions` for authorized household Q&A. Quick topics work without AI configuration; optional free text classifies a question through OpenAI, then the API generates the answer using existing services. No assistant mutation endpoint exists.
+
+## Optional natural-language questions
+
+Quick household questions need no provider setup. For free text:
+
+1. Run `npm run migrate:assistant` once with the configured private database connection, then `npm run smoke:assistant`. The latter uses a rollback-only transaction and makes no provider requests.
+2. Save `OPENAI_API_KEY` in ignored API `.env` for local use, or as a **Sensitive, Production** variable on Vercel's **housemate-api** project. Never put it in the web project, a `NEXT_PUBLIC_` variable, Git, logs, or chat. Optional `OPENAI_MODEL` defaults to `gpt-4o-mini` and must support Responses structured outputs.
+3. Restart the local API or redeploy the API project. Check Assistant availability while signed in, then verify free-text balance and today/cooking questions against the source pages.
+
+Only the question is sent to OpenAI. The API validates its allowlisted classification and builds answers from authorized services; no model-generated money or record links are used. HouseMate stores no prompts or conversation history, and sets `store: false` on provider requests (provider retention policy still applies). Requests have a 12-second provider timeout, 400 output-token cap, no automatic retry, 20 attempts per account per UTC hour, and 200 globally per UTC day. Failed/cancelled attempts can consume a slot. Private counters expire and are cleaned on the next AI request. Missing keys, provider errors, and exhausted budgets leave quick questions and manual flows available. Draft actions remain a later phase.
+## Other implemented endpoints
+
 - Personal `GET /v1/households/{id}/notifications`, individual read and bounded read-all, and `GET`/`PUT /notification-preferences`. All feed and preference operations enforce active membership and caller ownership. Stable cursor pages preserve PostgreSQL timestamp precision.
 - Authenticated `/v1/push-config` and account-owned `/v1/push-subscriptions` registration/list/removal. Server-generated transactional activity, scheduled reminders, and durable push delivery respect current membership, source state, preferences, read state, quiet hours, and device opt-in.
 - `GET /v1/households/{id}/dashboard` for an authorized, consistent dashboard snapshot (personal/household balances, pending bills ordered by urgency, recent financial activity, and the next upcoming meal).
@@ -64,7 +77,7 @@ Any active member can add, edit, assign, cancel, or purchase an open shopping it
 
 1. Create a Supabase project and obtain its URL, publishable key, and a PostgreSQL connection URL for a trusted server. Do not place the database URL in a web or mobile client.
 2. Copy `.env.example` to `.env` and fill in the values. Set `WEB_ORIGINS` to the exact browser app origin or a comma-separated list of allowed origins. Mobile requests do not need CORS.
-3. Apply `sql/001_household_foundation.sql`, then `sql/002_member_onboarding.sql` to the Supabase database with a privileged migration connection. Run `npm run migrate:expenses`, `npm run migrate:bills`, `npm run migrate:settlements`, `npm run migrate:edits`, `npm run migrate:voids`, `npm run migrate:meals`, `npm run migrate:shopping`, `npm run migrate:shopping-currency`, `npm run migrate:chores`, `npm run migrate:events`, `npm run migrate:announcements-polls`, and `npm run migrate:notifications` in that order to apply SQL files 003–015. The notification runner applies 014 once and reapplies the safe function correction in 015. The schema is private and is not exposed through Supabase's Data API. All fifteen migrations are applied in the configured project.
+3. Apply `sql/001_household_foundation.sql`, then `sql/002_member_onboarding.sql` to the Supabase database with a privileged migration connection. Run `npm run migrate:expenses`, `npm run migrate:bills`, `npm run migrate:settlements`, `npm run migrate:edits`, `npm run migrate:voids`, `npm run migrate:meals`, `npm run migrate:shopping`, `npm run migrate:shopping-currency`, `npm run migrate:chores`, `npm run migrate:events`, `npm run migrate:announcements-polls`, `npm run migrate:notifications`, then `npm run migrate:assistant` in that order to apply SQL files 003–016. The notification runner applies 014 once and reapplies the safe function correction in 015. The schema is private and is not exposed through Supabase's Data API. Never run migrations during normal requests.
 4. Run `npm ci` and `npm run dev` in this directory. The development command builds once and starts the API; restart it after changing API code or adding endpoints. If the web app says a feature needs a newer HouseMate API, restart this command and refresh the page.
 
 `npm run lint`, `npm run build`, `npm run typecheck`, and `npm test` check the code. `npm run smoke:expenses`, `npm run smoke:bills`, `npm run smoke:settlements`, `npm run smoke:edits`, and `npm run smoke:voids` exercise the configured database inside transactions that are rolled back. The edit and void checks cover history values, unauthorized actions, foreign-household IDs, previews, idempotency, audit snapshots, and balances. The same standard checks run in `.github/workflows/ci.yml` when this directory becomes its own repository. `npm start` runs compiled output with environment variables supplied by the host.

@@ -19,6 +19,8 @@
     "migrate:events": "node --env-file=.env scripts/apply-events-migration.mjs",
     "migrate:announcements-polls": "node --env-file=.env scripts/apply-announcements-polls-migration.mjs",
     "migrate:notifications": "node --env-file=.env scripts/apply-notifications-migration.mjs",
+    "migrate:assistant": "npm run build && node --env-file=.env scripts/apply-assistant-migration.mjs",
+    "smoke:assistant": "npm run build && node --env-file=.env scripts/smoke-assistant.mjs",
     "push:keys": "node scripts/generate-push-keys.mjs",
     "cron:secret": "node scripts/generate-cron-secret.mjs",
     "scheduler:plan": "node scripts/external-scheduler.mjs plan",

@@ -8,6 +8,7 @@ export interface Config {
   serverless: boolean;
   cronSecret: string | null;
   databaseSslCa: string | undefined;
+  assistant?: { apiKey: string; model: string } | null;
   vapid: { subject: string; publicKey: string; privateKey: string } | null;
 }
 
@@ -79,6 +80,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     serverless,
     cronSecret,
     databaseSslCa: env.DATABASE_SSL_CA || undefined,
+    assistant: env.OPENAI_API_KEY?.trim()
+      ? {
+          apiKey: env.OPENAI_API_KEY.trim(),
+          model: env.OPENAI_MODEL?.trim() || 'gpt-4o-mini',
+        }
+      : null,
     vapid:
       env.VAPID_SUBJECT && env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY
         ? validatedVapid(

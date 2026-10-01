@@ -2,6 +2,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import cors from '@fastify/cors';
 import Fastify, { type FastifyRequest, LogController } from 'fastify';
 import type { AnnouncementRepository } from './announcements.js';
+import {
+  type HouseholdAssistant,
+  registerAssistantRoutes,
+} from './assistant.js';
 import { UUID_PATTERN } from './auth.js';
 import type {
   BillDraft,
@@ -43,6 +47,7 @@ import type {
 interface AppDependencies {
   fastifyFactory?: typeof Fastify;
   auth: AuthVerifier;
+  assistant?: HouseholdAssistant;
   households: HouseholdRepository;
   expenses?: ExpenseRepository;
   bills?: BillRepository;
@@ -190,6 +195,7 @@ function validTimeZone(value: string): boolean {
 export function createApp({
   fastifyFactory = Fastify,
   auth,
+  assistant,
   households,
   expenses,
   bills,
@@ -223,6 +229,11 @@ export function createApp({
     (request) => requireUser(request, auth),
     notifications,
     pushConfig,
+  );
+  registerAssistantRoutes(
+    app,
+    (request) => requireUser(request, auth),
+    assistant,
   );
 
   app.setErrorHandler(async (error, request, reply) => {

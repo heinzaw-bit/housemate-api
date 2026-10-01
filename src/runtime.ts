@@ -2,6 +2,9 @@ import type Fastify from 'fastify';
 import pg from 'pg';
 import { PgAnnouncementRepository } from './announcements.js';
 import { createApp } from './application.js';
+import { HouseholdAssistant } from './assistant.js';
+import { PgAssistantBudget } from './assistant-budget.js';
+import { OpenAiAssistantProvider } from './assistant-provider.js';
 import { createSupabaseAuthVerifier } from './auth.js';
 import { PgBillRepository } from './bills.js';
 import { PgChoreRepository } from './chores.js';
@@ -44,6 +47,23 @@ export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
       config.supabasePublishableKey,
     ),
     households: new PgHouseholdRepository(pool),
+    assistant: new HouseholdAssistant(
+      {
+        households: new PgHouseholdRepository(pool),
+        dashboard: new PgDashboardRepository(pool),
+        shopping: new PgShoppingRepository(pool),
+        chores: new PgChoreRepository(pool),
+        meals: new PgMealRepository(pool),
+        events: new PgEventRepository(pool),
+      },
+      config.assistant
+        ? new OpenAiAssistantProvider(
+            config.assistant.apiKey,
+            config.assistant.model,
+          )
+        : null,
+      config.assistant ? new PgAssistantBudget(pool) : null,
+    ),
     expenses: new PgExpenseRepository(pool),
     bills: new PgBillRepository(pool),
     money: new PgMoneyRepository(pool),

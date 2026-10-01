@@ -8,6 +8,88 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /v1/households/{id}/assistant:
+    get:
+      summary: Read assistant availability for an active household member
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      responses:
+        '200':
+          description: No-store availability; quick questions work independently of AI configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [naturalLanguageEnabled]
+                properties:
+                  naturalLanguageEnabled: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/assistant/questions:
+    post:
+      summary: Answer a read-only household question from authorized API services
+      description: Choose a quick topic OR send a message (1–1000 characters). Natural-language classification requires server-only OpenAI configuration and a durable budget (20 requests per account per hour, 200 globally per UTC day). No household records are mutated. The model only classifies intent; the API generates answers and amounts. Ambiguous, unsupported, or mutation requests receive clarification. No conversation history is stored or sent. Private answers are never cached. Lists are bounded and disclose truncation. Bills report provider payment status, not individual member bill payments.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                topic: { type: string, enum: [summary, balance, bills, meals, chores, shopping, events] }
+                message: { type: string, minLength: 1, maxLength: 1000 }
+              oneOf:
+                - { required: [topic], not: { required: [message] } }
+                - { required: [message], not: { required: [topic] } }
+      responses:
+        '200':
+          description: API-generated answer or clarification with authorized source links
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [kind, topic, text, generatedAt, timezone, rows, sources, partial]
+                properties:
+                  kind: { type: string, enum: [answer, clarification] }
+                  topic: { type: string, enum: [summary, balance, bills, meals, chores, shopping, events, unsupported] }
+                  text: { type: string }
+                  generatedAt: { type: string, format: date-time }
+                  timezone: { type: string }
+                  partial: { type: boolean }
+                  rows:
+                    type: array
+                    maxItems: 10
+                    items:
+                      type: object
+                      required: [label, detail, href]
+                      properties:
+                        label: { type: string }
+                        detail: { type: string }
+                        href: { type: string, description: Same-app source path including household selector }
+                  sources:
+                    type: array
+                    items:
+                      type: object
+                      required: [label, href]
+                      properties:
+                        label: { type: string }
+                        href: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429':
+          description: AI_LIMIT_REACHED; wait for the next hourly or daily UTC budget window. Failed provider attempts consume a slot; requests are never automatically retried.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: ASSISTANT_UNAVAILABLE or ASSISTANT_SETUP_REQUIRED; quick questions and manual household flows remain available
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
   /internal/notifications/run:
     get:
       summary: Run one notification reminder and delivery batch
