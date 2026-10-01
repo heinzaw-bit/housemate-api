@@ -6,7 +6,7 @@ Shared product scope and engineering context live in the umbrella's [SPEC](https
 
 ## Implemented slice
 
-- `GET /v1/households/{id}/assistant` and `POST /assistant/questions` for authorized household Q&A. Quick topics work without AI configuration; optional free text classifies a question through Gemini, then the API generates the answer using existing services. No assistant mutation endpoint exists.
+- `GET /v1/households/{id}/assistant` and `POST /assistant/questions` for authorized household Q&A. Quick topics work without AI configuration; optional free text classifies a question through Gemini, then the API generates the answer using existing services. The additive `POST /assistant/drafts` endpoint prepares local meal/announcement drafts without provider calls, writes or persisted drafts; availability exposes `actionDraftsEnabled`. Review/edit/confirm in the client, then use the existing idempotent meal/announcement endpoints. Recognized unsupported/multiple/negated commands do not fall back to Gemini. No separate assistant mutation endpoint or migration is added.
 
 ## Optional natural-language questions
 

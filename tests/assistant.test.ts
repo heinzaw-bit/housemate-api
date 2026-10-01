@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createApp } from '../src/application.js';
 import { HouseholdAssistant } from '../src/assistant.js';
+import { actionCommand, prepareActionDraft } from '../src/assistant-drafts.js';
 import type { AssistantIntent } from '../src/assistant-provider.js';
 import { GeminiAssistantProvider } from '../src/assistant-provider.js';
 import type { Chore } from '../src/chores.js';
@@ -311,7 +312,11 @@ test('duplicate names are clarified; unsupported writes never reach household se
     assert.match(result.json().text, /More than one/);
     const action = await unsupported.ask({ message: 'Delete all bills' });
     assert.equal(action.json().kind, 'clarification');
-    assert.ok(!unsupported.calls.some((call) => call.startsWith('dashboard:')));
+    assert.ok(
+      !unsupported.calls.some((call) =>
+        /^(dashboard|provider|budget):/.test(call),
+      ),
+    );
   } finally {
     await ambiguous.app.close();
     await unsupported.app.close();
@@ -512,6 +517,132 @@ test('privacy acknowledgement and private-input checks run before budget or Gemi
       ),
     );
     assert.equal((await f.ask({ topic: 'balance' })).statusCode, 200);
+  } finally {
+    await f.app.close();
+  }
+});
+
+test('local action drafts authorize, exclude member emails, and never contact Gemini or mutate records', async () => {
+  const f = fixture({ configured: false });
+  const draft = (message: string, selector = id, auth = headers) =>
+    f.app.inject({
+      method: 'POST',
+      url: `/v1/households/${selector}/assistant/drafts`,
+      headers: auth,
+      payload: { message },
+    });
+  try {
+    assert.equal(
+      (await draft('Announce dinner is ready', id, {} as typeof headers))
+        .statusCode,
+      401,
+    );
+    assert.equal(
+      (await draft('Announce dinner is ready', foreign)).statusCode,
+      404,
+    );
+    assert.equal((await draft(' ')).statusCode, 400);
+    assert.equal((await draft('x'.repeat(1001))).statusCode, 400);
+    const meal = await draft('Please plan dinner tomorrow at 7pm');
+    assert.equal(meal.statusCode, 200);
+    assert.equal(meal.headers['cache-control'], 'no-store');
+    assert.equal(meal.json().draft.fields.startsAtLocal, '2026-10-02T19:00');
+    assert.equal(meal.json().draft.fields.responseDeadlineLocal, '');
+    assert.deepEqual(meal.json().draft.recipientIds, ['me', 'alex1', 'alex2']);
+    assert.ok(
+      meal
+        .json()
+        .draft.unresolvedFields.some((field: string) =>
+          field.includes('responses close'),
+        ),
+    );
+    const targeted = await draft('Plan dinner tomorrow at 7pm only for Alex');
+    assert.deepEqual(targeted.json().draft.recipientIds, []);
+    const announcement = await draft(
+      'Announce that Alex will bring dinner at 7pm. Meet in the kitchen.',
+    );
+    assert.equal(announcement.json().draft.kind, 'announcement');
+    assert.equal(
+      announcement.json().draft.fields.body,
+      'Alex will bring dinner at 7pm. Meet in the kitchen.',
+    );
+    assert.ok(
+      !JSON.stringify(announcement.json()).includes('private@example.test'),
+    );
+    assert.deepEqual((await draft('What meals are coming up?')).json(), {
+      draft: null,
+    });
+    for (const command of [
+      'Split a bill',
+      'Do not announce dinner',
+      'Plan dinner tomorrow at 7pm and announce it',
+    ]) {
+      assert.equal((await draft(command)).statusCode, 400);
+    }
+    assert.ok(f.calls.every((call) => call.startsWith('access:')));
+    assert.equal(
+      (
+        await f.app.inject({ url: `/v1/households/${id}/assistant`, headers })
+      ).json().actionDraftsEnabled,
+      true,
+    );
+  } finally {
+    await f.app.close();
+  }
+  const revoked = fixture({ revoke: true });
+  try {
+    await assert.rejects(
+      revoked.assistant.draft('user', id, 'Announce dinner is ready'),
+      (error: unknown) => error instanceof ApiError && error.statusCode === 404,
+    );
+  } finally {
+    await revoked.app.close();
+  }
+});
+
+test('draft times use the household calendar and ambiguous or invalid values remain unresolved', async () => {
+  const f = fixture();
+  try {
+    const members = await f.data.households.listMembers();
+    const prepare = (text: string, now = '2026-10-01T20:00:00Z') => {
+      const command = actionCommand(text);
+      assert.ok(command);
+      const draft = prepareActionDraft(
+        command,
+        household,
+        members,
+        new Date(now),
+      );
+      assert.equal(draft.kind, 'meal');
+      return draft.kind === 'meal' ? draft.fields.startsAtLocal : '';
+    };
+    // Already October 2 in Bangkok, despite October 1 UTC.
+    assert.equal(prepare('Plan breakfast tomorrow at 7am'), '2026-10-03T07:00');
+    assert.equal(prepare('Create lunch today at 12pm'), '2026-10-02T12:00');
+    assert.equal(prepare('Schedule dinner today at 12am'), '2026-10-02T00:00');
+    assert.equal(
+      prepare('Plan dinner 2028-02-29 at 19:30'),
+      '2028-02-29T19:30',
+    );
+    for (const text of [
+      'Plan dinner tomorrow at 7',
+      'Plan dinner tonight at 12am',
+      'Plan dinner tomorrow October 8 at 7pm',
+      'Plan dinner tomorrow at 7pm next week',
+      'Plan dinner next Friday at 7pm',
+      'Plan dinner Friday at 7pm',
+      'Plan dinner 2027-02-29 at 7pm',
+      'Plan dinner tomorrow at 13pm',
+      'Plan dinner tomorrow at 7:99pm',
+      'Plan dinner today or tomorrow at 7pm',
+      'Plan dinner tomorrow at 7pm or 8pm',
+    ])
+      assert.equal(prepare(text), '', text);
+    assert.equal(actionCommand('Do not announce dinner'), null);
+    assert.equal(
+      actionCommand('Can you please announce that dinner is ready')?.kind,
+      'announcement',
+    );
   } finally {
     await f.app.close();
   }

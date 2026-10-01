@@ -20,17 +20,55 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [naturalLanguageEnabled, provider, requiresPrivacyAcknowledgement]
+                required: [naturalLanguageEnabled, actionDraftsEnabled, provider, requiresPrivacyAcknowledgement]
                 properties:
                   naturalLanguageEnabled: { type: boolean }
+                  actionDraftsEnabled: { type: boolean, description: Local meal and announcement drafting is independent of Gemini configuration }
                   provider: { type: [string, 'null'], enum: [gemini, null] }
                   requiresPrivacyAcknowledgement: { type: boolean }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/assistant/drafts:
+    post:
+      summary: Prepare a local meal-check or announcement draft without publishing
+      description: Authorized active household members only. Common English plan/create meal and announce/post announcement commands are interpreted inside HouseMate; the message and member details never go to Gemini, consume model quota, or create records. Unclear times/deadlines/audiences require editing. Drafts are returned to the client and are not persisted. Null draft means a read-only question or unrecognized non-action syntax; recognized unsupported, negated or multiple action commands return 400 and must never fall back to Gemini; no provider fallback occurs here. The client reviews and explicitly confirms through the existing idempotent meals or announcements POST endpoint, whose membership, audience, time and content validations remain authoritative. Notifications are generated only by a successful publication. Private input/output must not be cached or logged.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1, maxLength: 1000 }
+      responses:
+        '200':
+          description: No-store unsaved draft with fields requiring clarification, or null
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [draft]
+                properties:
+                  draft:
+                    anyOf:
+                      - $ref: '#/components/schemas/AssistantActionDraft'
+                      - { type: 'null' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503':
+          description: Assistant service unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
   /v1/households/{id}/assistant/questions:
     post:
       summary: Answer a read-only household question from authorized API services
-      description: Choose a quick topic OR send a general question (1–1000 characters). Gemini free-tier classification requires server-only configuration and privacyAcknowledged true. The member acknowledges Google's unpaid-tier data use and that the question contains no personal/confidential information. The API rejects recognized active member names/emails, digits, links and credential markers before provider use; this guard is not a comprehensive personal-data detector. Named member questions belong in Money. Only the question is sent; no household records, member lists, financial results or conversation history are sent or saved by HouseMate. The model only classifies intent; the API generates answers and amounts. No household records are mutated. Durable limits are 20 attempts per account per UTC hour and 200 globally per UTC day. Upstream limits fail without retry or paid fallback. Private answers are never cached. Bounded lists disclose truncation. Bills report provider status, not individual member payments.
+      description: Choose a quick topic OR send a general question (1–1000 characters). Gemini free-tier classification requires server-only configuration and privacyAcknowledged true. The member acknowledges Google's unpaid-tier data use and that the question contains no personal/confidential information. The API rejects recognized active member names/emails, digits, links and credential markers before provider use; this guard is not a comprehensive personal-data detector. Named member questions belong in Money. Recognized action commands receive local clarification without provider use. Only the general question is sent; no household records, member lists, financial results or conversation history are sent or saved by HouseMate. The model only classifies intent; the API generates answers and amounts. No household records are mutated. Durable limits are 20 attempts per account per UTC hour and 200 globally per UTC day. Upstream limits fail without retry or paid fallback. Private answers are never cached. Bounded lists disclose truncation. Bills report provider status, not individual member payments.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
       requestBody:
@@ -1979,6 +2017,54 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    AssistantActionDraft:
+      type: object
+      required: [kind, householdId, timezone, generatedAt, fields, members, recipientIds, unresolvedFields, notes]
+      properties:
+        kind: { type: string, enum: [meal, announcement] }
+        householdId: { type: string, format: uuid }
+        timezone: { type: string }
+        generatedAt: { type: string, format: date-time }
+        members:
+          type: array
+          items:
+            type: object
+            required: [id, displayName]
+            properties:
+              id: { type: string, format: uuid }
+              displayName: { type: string }
+        recipientIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        unresolvedFields:
+          type: array
+          items: { type: string }
+        notes:
+          type: array
+          items: { type: string }
+      oneOf:
+        - properties:
+            kind: { const: meal }
+            fields:
+              type: object
+              required: [mealType, question, startsAtLocal, responseDeadlineLocal]
+              properties:
+                mealType: { type: string, enum: [breakfast, lunch, dinner, other] }
+                question: { type: string }
+                startsAtLocal: { type: string, description: Household local YYYY-MM-DDTHH:mm or empty when unresolved }
+                responseDeadlineLocal: { type: string, description: Must be supplied by the member, in household local time }
+        - properties:
+            kind: { const: announcement }
+            fields:
+              type: object
+              required: [title, body, priority, requiresAcknowledgement, expiresAtLocal]
+              properties:
+                title: { type: string }
+                body: { type: string }
+                priority: { type: string, enum: [normal, important, urgent] }
+                requiresAcknowledgement: { type: boolean }
+                expiresAtLocal: { type: [string, 'null'] }
     NotificationPage:
       type: object
       required: [notifications, unreadCount, nextCursor]

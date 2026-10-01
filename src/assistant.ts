@@ -1,6 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { AssistantBudget } from './assistant-budget.js';
 import {
+  actionCommand,
+  isActionRequest,
+  prepareActionDraft,
+} from './assistant-drafts.js';
+import {
   type AssistantIntent,
   type AssistantProvider,
   type AssistantTopic,
@@ -61,8 +66,28 @@ export class HouseholdAssistant {
     const enabled = !!this.provider && !!this.budget;
     return {
       naturalLanguageEnabled: enabled,
+      actionDraftsEnabled: true,
       provider: enabled ? 'gemini' : null,
       requiresPrivacyAcknowledgement: true,
+    };
+  }
+
+  async draft(userId: string, householdId: string, message: string) {
+    const household = await this.access(userId, householdId);
+    const command = actionCommand(message);
+    if (!command) {
+      if (isActionRequest(message))
+        throw new ApiError(
+          400,
+          'ASSISTANT_ACTION_UNSUPPORTED',
+          'Use one command at a time: “Plan dinner tomorrow at 7pm” or “Announce that dinner is ready.” Other actions still use the House and Money pages.',
+        );
+      return { draft: null };
+    }
+    const members = await this.data.households.listMembers(userId, householdId);
+    await this.access(userId, householdId);
+    return {
+      draft: prepareActionDraft(command, household, members, this.clock()),
     };
   }
 
@@ -71,12 +96,31 @@ export class HouseholdAssistant {
     householdId: string,
     question: AssistantQuestion,
   ): Promise<AssistantAnswer> {
-    // Authorize before spending budget or contacting the provider.
     const household = await this.access(userId, householdId);
     let intent: AssistantIntent;
     if (question.topic)
       intent = { topic: question.topic, memberName: null, scope: null };
     else {
+      if (isActionRequest(question.message))
+        return {
+          kind: 'clarification',
+          topic: 'unsupported',
+          text: 'Use the local draft flow for meal checks and announcements, then review and confirm. Other actions still use House or Money.',
+          generatedAt: this.clock().toISOString(),
+          timezone: household.timezone,
+          rows: [],
+          sources: [
+            {
+              label: 'House',
+              href: `/house?household=${encodeURIComponent(householdId)}`,
+            },
+            {
+              label: 'Money',
+              href: `/money?household=${encodeURIComponent(householdId)}`,
+            },
+          ],
+          partial: false,
+        };
       if (!this.provider || !this.budget)
         throw new ApiError(
           503,
@@ -429,6 +473,30 @@ export function registerAssistantRoutes(
       reply.header('Cache-Control', 'no-store');
       const user = await requireUser(request);
       return service().config(user.id, request.params.id);
+    },
+  );
+  app.post<{ Params: { id: string }; Body: { message: string } }>(
+    '/v1/households/:id/assistant/drafts',
+    {
+      bodyLimit: 8192,
+      schema: {
+        params,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['message'],
+          properties: {
+            message: { type: 'string', minLength: 1, maxLength: 1000 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const user = await requireUser(request);
+      if (!request.body.message.trim())
+        throw new ApiError(400, 'VALIDATION_ERROR', 'Enter a request.');
+      return service().draft(user.id, request.params.id, request.body.message);
     },
   );
   app.post<{ Params: { id: string }; Body: AssistantQuestion }>(
