@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { AssistantBudget } from './assistant-budget.js';
 import {
+  type ActionKind,
   actionCommand,
+  actionKinds,
   isActionRequest,
   prepareActionDraft,
 } from './assistant-drafts.js';
@@ -67,20 +69,26 @@ export class HouseholdAssistant {
     return {
       naturalLanguageEnabled: enabled,
       actionDraftsEnabled: true,
+      supportedDraftKinds: [...actionKinds],
       provider: enabled ? 'gemini' : null,
       requiresPrivacyAcknowledgement: true,
     };
   }
 
-  async draft(userId: string, householdId: string, message: string) {
+  async draft(
+    userId: string,
+    householdId: string,
+    message: string,
+    allowedKinds: ActionKind[] = ['meal', 'announcement'],
+  ) {
     const household = await this.access(userId, householdId);
     const command = actionCommand(message);
-    if (!command) {
+    if (!command || !allowedKinds.includes(command.kind)) {
       if (isActionRequest(message))
         throw new ApiError(
           400,
           'ASSISTANT_ACTION_UNSUPPORTED',
-          'Use one command at a time: “Plan dinner tomorrow at 7pm” or “Announce that dinner is ready.” Other actions still use the House and Money pages.',
+          'Use one command at a time: “Plan dinner tomorrow at 7pm” or “Announce that dinner is ready.” Try “Add shopping eggs”, “Create chore clean the kitchen”, “Add expense dinner 500 THB” or “Create bill electricity”. Fill unresolved fields, review and confirm; deletes and edits still use the normal pages.',
         );
       return { draft: null };
     }
@@ -105,7 +113,7 @@ export class HouseholdAssistant {
         return {
           kind: 'clarification',
           topic: 'unsupported',
-          text: 'Use the local draft flow for meal checks and announcements, then review and confirm. Other actions still use House or Money.',
+          text: 'Use the local draft flow for meal checks, announcements, shopping, chores, expenses or bills, then edit, review and confirm. Deletes and edits still use House or Money.',
           generatedAt: this.clock().toISOString(),
           timezone: household.timezone,
           rows: [],
@@ -223,7 +231,7 @@ export class HouseholdAssistant {
     switch (intent.topic) {
       case 'unsupported':
         clarify(
-          'I can answer one question about current balances, unpaid provider bills, meals, open chores, shopping, or upcoming events. I cannot change records yet. HouseMate does not track each member’s bill payment status; check confirmed balances instead.',
+          'I can answer one question about current balances, unpaid provider bills, meals, open chores, shopping, or upcoming events. Actions need a separate editable draft and confirmation. HouseMate does not track each member’s bill payment status; check confirmed balances instead.',
         );
         break;
       case 'summary':
@@ -475,7 +483,10 @@ export function registerAssistantRoutes(
       return service().config(user.id, request.params.id);
     },
   );
-  app.post<{ Params: { id: string }; Body: { message: string } }>(
+  app.post<{
+    Params: { id: string };
+    Body: { message: string; allowedKinds?: ActionKind[] };
+  }>(
     '/v1/households/:id/assistant/drafts',
     {
       bodyLimit: 8192,
@@ -487,6 +498,13 @@ export function registerAssistantRoutes(
           required: ['message'],
           properties: {
             message: { type: 'string', minLength: 1, maxLength: 1000 },
+            allowedKinds: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 6,
+              uniqueItems: true,
+              items: { type: 'string', enum: [...actionKinds] },
+            },
           },
         },
       },
@@ -496,7 +514,12 @@ export function registerAssistantRoutes(
       const user = await requireUser(request);
       if (!request.body.message.trim())
         throw new ApiError(400, 'VALIDATION_ERROR', 'Enter a request.');
-      return service().draft(user.id, request.params.id, request.body.message);
+      return service().draft(
+        user.id,
+        request.params.id,
+        request.body.message,
+        request.body.allowedKinds,
+      );
     },
   );
   app.post<{ Params: { id: string }; Body: AssistantQuestion }>(

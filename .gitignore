@@ -9,3 +9,6 @@ coverage/
 .run/
 .vercel/
 *.log
+
+# Generated Supabase CLI version metadata; keep migration sources tracked.
+supabase/.temp/

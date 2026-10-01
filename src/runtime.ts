@@ -25,6 +25,7 @@ import {
 import { createPushSender, NotificationWorker } from './notification-worker.js';
 import { PgNotificationRepository, type PushConfig } from './notifications.js';
 import { PgPollRepository } from './polls.js';
+import { PgSearchRepository } from './search.js';
 import { PgShoppingRepository } from './shopping.js';
 
 export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
@@ -66,6 +67,7 @@ export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
     money: new PgMoneyRepository(pool),
     dashboard: new PgDashboardRepository(pool),
     houseActions: new PgHouseActionRepository(pool),
+    search: new PgSearchRepository(pool),
     meals: new PgMealRepository(pool),
     shopping: new PgShoppingRepository(pool),
     chores: new PgChoreRepository(pool),

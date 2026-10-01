@@ -35,6 +35,8 @@ import type { MoneyRepository, SettlementDraft } from './money-types.js';
 import { registerNotificationRoutes } from './notification-routes.js';
 import type { NotificationRepository, PushConfig } from './notifications.js';
 import type { PollRepository } from './polls.js';
+import type { SearchRepository } from './search.js';
+import { registerSearchRoutes } from './search-routes.js';
 import type { ShoppingDraft, ShoppingRepository } from './shopping.js';
 import type {
   AuthenticatedUser,
@@ -54,6 +56,7 @@ interface AppDependencies {
   money?: MoneyRepository;
   dashboard?: DashboardRepository;
   houseActions?: HouseActionRepository;
+  search?: SearchRepository;
   meals?: MealRepository;
   shopping?: ShoppingRepository;
   chores?: ChoreRepository;
@@ -202,6 +205,7 @@ export function createApp({
   money,
   dashboard,
   houseActions,
+  search,
   meals,
   shopping,
   chores,
@@ -224,6 +228,7 @@ export function createApp({
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
     allowedHeaders: ['Authorization', 'Content-Type'],
   });
+  registerSearchRoutes(app, (request) => requireUser(request, auth), search);
   registerNotificationRoutes(
     app,
     (request) => requireUser(request, auth),
@@ -1219,7 +1224,10 @@ export function createApp({
         return reply.header('Cache-Control', 'no-store').send(item);
       },
     );
-    app.post<{ Params: { id: string }; Body: ShoppingDraft }>(
+    app.post<{
+      Params: { id: string };
+      Body: ShoppingDraft & { idempotencyKey?: string };
+    }>(
       '/v1/households/:id/shopping-items',
       {
         schema: {
@@ -1228,7 +1236,10 @@ export function createApp({
             type: 'object',
             additionalProperties: false,
             required: draftRequired,
-            properties: draftProperties,
+            properties: {
+              ...draftProperties,
+              idempotencyKey: { type: 'string', format: 'uuid' },
+            },
           },
         },
       },
@@ -1238,7 +1249,12 @@ export function createApp({
           .status(201)
           .header('Cache-Control', 'no-store')
           .send(
-            await shopping.create(user.id, request.params.id, request.body),
+            await shopping.create(
+              user.id,
+              request.params.id,
+              request.body,
+              request.body.idempotencyKey,
+            ),
           );
       },
     );
@@ -1454,7 +1470,10 @@ export function createApp({
         return reply.header('Cache-Control', 'no-store').send(chore);
       },
     );
-    app.post<{ Params: { id: string }; Body: ChoreDraft }>(
+    app.post<{
+      Params: { id: string };
+      Body: ChoreDraft & { idempotencyKey?: string };
+    }>(
       '/v1/households/:id/chores',
       {
         schema: {
@@ -1464,6 +1483,7 @@ export function createApp({
             additionalProperties: false,
             required: ['title', 'note', 'dueAtLocal', 'assigneeMemberId'],
             properties: {
+              idempotencyKey: { type: 'string', format: 'uuid' },
               title: { type: 'string', minLength: 1, maxLength: 160 },
               note: { type: ['string', 'null'], maxLength: 500 },
               dueAtLocal: {
@@ -1480,7 +1500,14 @@ export function createApp({
         return reply
           .status(201)
           .header('Cache-Control', 'no-store')
-          .send(await chores.create(user.id, request.params.id, request.body));
+          .send(
+            await chores.create(
+              user.id,
+              request.params.id,
+              request.body,
+              request.body.idempotencyKey,
+            ),
+          );
       },
     );
     app.patch<{

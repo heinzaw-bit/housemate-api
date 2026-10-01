@@ -647,3 +647,101 @@ test('draft times use the household calendar and ambiguous or invalid values rem
     await f.app.close();
   }
 });
+
+test('additional action kinds require client opt-in and return only authorized unsaved drafts', async () => {
+  const f = fixture({ configured: false });
+  const request = (message: string, allowedKinds?: string[]) =>
+    f.app.inject({
+      method: 'POST',
+      url: `/v1/households/${id}/assistant/drafts`,
+      headers,
+      payload: { message, ...(allowedKinds ? { allowedKinds } : {}) },
+    });
+  try {
+    for (const [message, kind] of [
+      ['Add shopping eggs', 'shopping'],
+      ['Create chore clean the kitchen for Alex', 'chore'],
+      ['Add expense dinner 500.01 THB', 'expense'],
+      ['Create bill electricity 2106.57 THB', 'bill'],
+    ] as const) {
+      assert.equal(
+        (await request(message)).statusCode,
+        400,
+        'Older clients must not receive unknown draft kinds.',
+      );
+      const response = await request(message, [kind]);
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.headers['cache-control'], 'no-store');
+      const draft = response.json().draft;
+      assert.equal(draft.kind, kind);
+      assert.equal(draft.householdId, id);
+      assert.ok(draft.unresolvedFields.length > 0);
+      assert.ok(!JSON.stringify(draft).includes('private@example.test'));
+      if (kind === 'expense') {
+        assert.equal(draft.fields.amountMinor, 50001);
+        assert.deepEqual(draft.fields.split.shares, []);
+        assert.equal(draft.fields.payerMemberId, '');
+      }
+      if (kind === 'bill') {
+        assert.equal(draft.fields.amountMinor, 210657);
+        assert.deepEqual(draft.fields.adjustments, []);
+        assert.equal(draft.fields.periodStart, '');
+      }
+      if (kind === 'chore') {
+        assert.equal(draft.fields.assigneeMemberId, '');
+        assert.equal(draft.fields.dueAtLocal, '');
+      }
+    }
+    for (const message of [
+      'Delete a chore',
+      'Do not add shopping eggs',
+      'Never create bill rent',
+      'Add expense dinner then create chore dishes',
+    ])
+      assert.equal(
+        (await request(message, ['shopping', 'chore', 'expense', 'bill']))
+          .statusCode,
+        400,
+      );
+    assert.equal(
+      (await request('Add shopping eggs', ['unknown'])).statusCode,
+      400,
+    );
+    assert.ok(f.calls.every((call) => call.startsWith('access:')));
+  } finally {
+    await f.app.close();
+  }
+});
+
+test('ambiguous financial numbers remain unresolved and no allocation is guessed', async () => {
+  const f = fixture();
+  try {
+    const members = await f.data.households.listMembers();
+    for (const text of [
+      'Add expense lunch 500',
+      'Add expense lunch -500 THB',
+      'Add expense lunch 1.234 THB',
+      'Add bill power 100 THB plus 20 THB',
+      'Add bill rent 100 USD',
+      'Add expense lunch 500 THB for 3 people',
+    ]) {
+      const command = actionCommand(text);
+      assert.ok(command);
+      const draft = prepareActionDraft(
+        command,
+        household,
+        members,
+        new Date('2026-10-01T00:00:00Z'),
+      );
+      assert.ok(draft.kind === 'expense' || draft.kind === 'bill');
+      assert.equal(draft.fields.amountMinor, 0, text);
+      assert.ok(
+        draft.unresolvedFields.some((field) =>
+          field.includes('Enter the total'),
+        ),
+      );
+    }
+  } finally {
+    await f.app.close();
+  }
+});

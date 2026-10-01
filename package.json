@@ -48,7 +48,10 @@
     "uptime:configure": "node scripts/uptime.mjs configure",
     "uptime:status": "node scripts/uptime.mjs status",
     "backup:create": "npm run build && node scripts/backup.mjs create",
-    "backup:drill": "npm run build && node scripts/backup.mjs drill"
+    "backup:drill": "npm run build && node scripts/backup.mjs drill",
+    "smoke:search": "npm run build && node --env-file=.env scripts/smoke-search.mjs",
+    "migrate:action-create": "npm run build && node --env-file=.env scripts/apply-action-create-migration.mjs",
+    "smoke:assistant-create": "npm run build && node --env-file=.env scripts/smoke-assistant-create.mjs"
   },
   "type": "module",
   "dependencies": {

@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { priorCreate } from './create-request.js';
 import { ApiError } from './errors.js';
 
 export interface ChoreDraft {
@@ -54,6 +55,7 @@ export interface ChoreRepository {
     authUserId: string,
     householdId: string,
     draft: ChoreDraft,
+    idempotencyKey?: string,
   ): Promise<Chore>;
   reassign(
     authUserId: string,
@@ -226,13 +228,14 @@ export class PgChoreRepository implements ChoreRepository {
     client: Pool | PoolClient,
     authUserId: string,
     householdId: string,
+    write = false,
   ): Promise<Access> {
     const result = await client.query<Access>(
       `SELECT m.id AS member_id, u.id AS user_id, m.role, h.timezone
        FROM housemate.households h
        JOIN housemate.household_members m ON m.household_id = h.id AND m.status = 'active'
        JOIN housemate.users u ON u.id = m.user_id
-       WHERE h.id = $1 AND h.archived_at IS NULL AND u.auth_user_id = $2`,
+       WHERE h.id = $1 AND h.archived_at IS NULL AND u.auth_user_id = $2 ${write ? 'FOR SHARE OF h, m' : ''}`,
       [householdId, authUserId],
     );
     if (!result.rows[0])
@@ -330,6 +333,7 @@ export class PgChoreRepository implements ChoreRepository {
     authUserId: string,
     householdId: string,
     draft: ChoreDraft,
+    idempotencyKey?: string,
   ): Promise<Chore> {
     const title = draft.title.trim();
     const note = draft.note?.trim() || null;
@@ -352,7 +356,25 @@ export class PgChoreRepository implements ChoreRepository {
         'Enter a valid due date and time.',
       );
     return this.transaction(async (client) => {
-      const access = await this.access(client, authUserId, householdId);
+      const access = await this.access(client, authUserId, householdId, true);
+      const prior = await priorCreate(
+        client,
+        'chores',
+        householdId,
+        access.user_id,
+        idempotencyKey,
+        {
+          title,
+          note,
+          dueAtLocal: draft.dueAtLocal,
+          assigneeMemberId: draft.assigneeMemberId,
+        },
+      );
+      if (prior.id) {
+        const chore = await this.read(client, householdId, prior.id, access);
+        if (!chore) throw new Error('Could not read confirmed chore');
+        return chore;
+      }
       await this.activeMember(client, householdId, draft.assigneeMemberId);
       const converted = await client.query<{ due_at: Date; due_local: string }>(
         `SELECT ($1::timestamp AT TIME ZONE $2) AS due_at,
@@ -371,8 +393,8 @@ export class PgChoreRepository implements ChoreRepository {
           'Due date must be a future time in the household timezone.',
         );
       const inserted = await client.query<{ id: string }>(
-        `INSERT INTO housemate.chores (household_id, title, note, due_at, timezone, assignee_member_id, created_by_user_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        `INSERT INTO housemate.chores (household_id, title, note, due_at, timezone, assignee_member_id, created_by_user_id, idempotency_key, request_hash)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
         [
           householdId,
           title,
@@ -381,6 +403,8 @@ export class PgChoreRepository implements ChoreRepository {
           access.timezone,
           draft.assigneeMemberId,
           access.user_id,
+          idempotencyKey ?? null,
+          prior.hash,
         ],
       );
       const id = inserted.rows[0]?.id;

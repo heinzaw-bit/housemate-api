@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { priorCreate } from './create-request.js';
 import { ApiError } from './errors.js';
 import type { Expense, ExpenseDraft } from './expense-types.js';
 import { PgExpenseRepository } from './expenses.js';
@@ -46,6 +47,7 @@ export interface ShoppingRepository {
     authUserId: string,
     householdId: string,
     draft: ShoppingDraft,
+    idempotencyKey?: string,
   ): Promise<ShoppingItem>;
   edit(
     authUserId: string,
@@ -328,18 +330,46 @@ export class PgShoppingRepository implements ShoppingRepository {
     authUserId: string,
     householdId: string,
     input: ShoppingDraft,
+    idempotencyKey?: string,
   ): Promise<ShoppingItem> {
     const draft = cleanDraft(input);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       const access = await this.access(client, authUserId, householdId, true);
+      const prior = await priorCreate(
+        client,
+        'shopping_items',
+        householdId,
+        access.user_id,
+        idempotencyKey,
+        {
+          title: draft.title,
+          quantity: draft.quantity,
+          unit: draft.unit,
+          note: draft.note,
+          priority: draft.priority,
+          assignedBuyerMemberId: draft.assignedBuyerMemberId,
+          estimatedPriceMinor: draft.estimatedPriceMinor,
+        },
+      );
+      if (prior.id) {
+        const item = await this.read(
+          client,
+          householdId,
+          prior.id,
+          access.member_id,
+        );
+        if (!item) throw new Error('Could not read confirmed shopping item');
+        await client.query('COMMIT');
+        return item;
+      }
       await this.buyer(client, householdId, draft.assignedBuyerMemberId);
       const created = await client.query<{ id: string }>(
         `INSERT INTO housemate.shopping_items
          (household_id, currency, title, quantity, unit, note, priority, assigned_buyer_member_id,
-          status, estimated_price_minor, created_by_user_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+          status, estimated_price_minor, created_by_user_id, idempotency_key, request_hash)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
         [
           householdId,
           access.currency,
@@ -352,6 +382,8 @@ export class PgShoppingRepository implements ShoppingRepository {
           draft.assignedBuyerMemberId ? 'assigned' : 'needed',
           draft.estimatedPriceMinor,
           access.user_id,
+          idempotencyKey ?? null,
+          prior.hash,
         ],
       );
       if (draft.estimatedPriceMinor !== null)

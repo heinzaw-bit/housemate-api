@@ -1,6 +1,20 @@
 import type { AnnouncementDraft } from './announcements.js';
+import type { BillDraft } from './bill-types.js';
+import type { ChoreDraft } from './chores.js';
+import type { ExpenseDraft } from './expense-types.js';
 import type { MealDraft } from './meals.js';
+import type { ShoppingDraft } from './shopping.js';
 import type { Household, HouseholdMember } from './types.js';
+
+export const actionKinds = [
+  'meal',
+  'announcement',
+  'shopping',
+  'chore',
+  'expense',
+  'bill',
+] as const;
+export type ActionKind = (typeof actionKinds)[number];
 
 interface DraftBase {
   householdId: string;
@@ -31,10 +45,14 @@ export type AssistantActionDraft = DraftBase &
           | 'expiresAtLocal'
         >;
       }
+    | { kind: 'shopping'; fields: ShoppingDraft }
+    | { kind: 'chore'; fields: ChoreDraft }
+    | { kind: 'expense'; fields: ExpenseDraft }
+    | { kind: 'bill'; fields: BillDraft }
   );
 
 export function isActionRequest(message: string): boolean {
-  return /^(?:(?:please|can you|could you|do not|don't)\s+)*(?:plan|create|schedule|organize|arrange|announce|announcement|post|publish|notify|send|delete|edit|split|add|tell everyone)\b/i.test(
+  return /^(?:(?:please|can you|could you|do not|don't|never)\s+)*(?:plan|create|schedule|organize|arrange|announce|announcement|post|publish|notify|send|delete|edit|split|add|buy|assign|tell everyone)\b/i.test(
     message.trim(),
   );
 }
@@ -42,16 +60,36 @@ export function isActionRequest(message: string): boolean {
 // Strict local command routing: private action requests never reach a provider.
 export function actionCommand(
   message: string,
-): { kind: 'meal' | 'announcement'; text: string } | null {
+): { kind: ActionKind; text: string } | null {
   const text = message
     .trim()
     .replace(/^(?:(?:please|can you|could you)\s+)+/i, '');
   if (
-    /\b(?:and|then|also)\s+(?:plan|create|announce|publish|delete|edit|send|schedule)\b/i.test(
+    /\b(?:and|then|also)\s+(?:plan|create|announce|publish|delete|edit|send|schedule|add|buy|assign|split)\b/i.test(
       text,
     )
   )
     return null;
+  if (/^(?:do not|don't|never)\b/i.test(text)) return null;
+  const chore =
+    /^(?:add|create|schedule|assign)\s+(?:a\s+)?(?:chore|task)\b\s*[:,-]?\s*(.*)$/is.exec(
+      text,
+    );
+  if (chore) return { kind: 'chore', text: chore[1]?.trim() ?? '' };
+  const shopping =
+    /^(?:(?:add|create)\s+(?:(?:a\s+)?shopping(?:\s+item)?\b\s*[:,-]?\s*)|buy\s+)(.*)$/is.exec(
+      text,
+    ) ?? /^add\s+(.+?)\s+to (?:the )?shopping list[.!]?$/is.exec(text);
+  if (shopping) return { kind: 'shopping', text: shopping[1]?.trim() ?? '' };
+  const money =
+    /^(?:add|create|record|split)\s+(?:(?:an?|the)\s+)?(expense|bill)\b\s*[:,-]?\s*(.*)$/is.exec(
+      text,
+    );
+  if (money)
+    return {
+      kind: (money[1] ?? '').toLowerCase() as 'expense' | 'bill',
+      text: money[2]?.trim() ?? '',
+    };
   const announcement =
     /^(?:announce(?:ment)?|post (?:an? |the )?announcement|tell everyone|notify (?:everyone|the household))\b\s*[:,-]?\s*(?:that\s+)?(.*)$/is.exec(
       text,
@@ -181,6 +219,118 @@ export function prepareActionDraft(
     base.notes.push(
       'The proposed audience is all current household members. Review it before publishing.',
     );
+  if (
+    command.kind === 'shopping' ||
+    command.kind === 'chore' ||
+    command.kind === 'expense' ||
+    command.kind === 'bill'
+  ) {
+    base.recipientIds = [];
+    base.unresolvedFields = [];
+    base.notes = [
+      'Unsaved draft. Review the original request and all proposed details before confirming.',
+      `Original request: ${command.text}`,
+    ];
+    const title = command.text.slice(0, 160);
+    if (!title.trim()) base.unresolvedFields.push('Enter a title.');
+    if (command.kind === 'shopping') {
+      base.unresolvedFields.push(
+        'Check the item name, quantity, buyer and optional estimated price. One item is created per confirmation.',
+      );
+      return {
+        ...base,
+        kind: 'shopping',
+        fields: {
+          title,
+          quantity: null,
+          unit: null,
+          note: null,
+          priority: 'normal',
+          assignedBuyerMemberId: null,
+          estimatedPriceMinor: null,
+        },
+      };
+    }
+    if (command.kind === 'chore') {
+      base.unresolvedFields.push(
+        'Choose the intended assignee.',
+        'Enter an exact future due date and time.',
+      );
+      return {
+        ...base,
+        kind: 'chore',
+        fields: { title, note: null, dueAtLocal: '', assigneeMemberId: '' },
+      };
+    }
+    // Only an unambiguous explicitly currency-marked total is extracted. No shares
+    // or bill adjustments are inferred from a number/name in conversational text.
+    const totals = [
+      ...command.text.matchAll(
+        /(?:\b(USD|THB)\s+(\d+(?:\.\d{1,2})?)\b|(?<![\d.+-])(\d+(?:\.\d{1,2})?)\s+(USD|THB)\b)/gi,
+      ),
+    ];
+    const total = totals.length === 1 ? totals[0] : null;
+    const amount = total ? Number(total[2] ?? total[3]) : 0;
+    const currency = (total?.[1] ?? total?.[4])?.toUpperCase();
+    const amountMinor =
+      currency === household.defaultCurrency &&
+      Number.isSafeInteger(Math.round(amount * 100)) &&
+      amount > 0 &&
+      !/[\d]|[-+]/.test(command.text.replace(total?.[0] ?? '', '')) &&
+      amount <= 9999999999.99
+        ? Math.round(amount * 100)
+        : 0;
+    base.unresolvedFields.push(
+      'Choose the payer and the exact participants.',
+      'Check the title and confirm the total and split details.',
+    );
+    if (!amountMinor)
+      base.unresolvedFields.push(
+        `Enter the total in ${household.defaultCurrency}; ambiguous amounts or another currency are not converted.`,
+      );
+    base.notes.push(
+      'All final shares and rounding come from the API preview. This confirmation records money; it does not process a payment.',
+    );
+    if (command.kind === 'expense') {
+      base.unresolvedFields.push(
+        'Enter the expense date and choose the split method.',
+      );
+      return {
+        ...base,
+        kind: 'expense',
+        fields: {
+          title,
+          amountMinor,
+          currency: household.defaultCurrency,
+          spentOn: '',
+          payerMemberId: '',
+          split: { method: 'equal', shares: [] },
+        },
+      };
+    }
+    base.unresolvedFields.push(
+      'Enter the provider, billing period and due date.',
+      'Review provider payment status and enter every individual/shared charge or credit explicitly.',
+    );
+    return {
+      ...base,
+      kind: 'bill',
+      fields: {
+        title,
+        amountMinor,
+        currency: household.defaultCurrency,
+        billType: 'other',
+        provider: '',
+        periodStart: '',
+        periodEnd: '',
+        dueDate: '',
+        payerMemberId: '',
+        paymentStatus: 'unpaid',
+        sharedParticipantIds: [],
+        adjustments: [],
+      },
+    };
+  }
   if (command.kind === 'announcement') {
     if (!command.text)
       base.unresolvedFields.push('What should the announcement say?');

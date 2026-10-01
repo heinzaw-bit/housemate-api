@@ -8,6 +8,59 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /v1/households/{id}/search:
+    get:
+      summary: Search records visible to the active household member
+      description: Read-only case-insensitive literal substring search across expense titles, bill titles/providers, transfer participant names/method/notes, meal questions/types, chore titles/notes, shopping titles/notes/units, event titles/descriptions/locations, announcement titles/bodies and poll questions/options. No regex, wildcard operators, relevance ranking, user email search, draft/history-event search or AI provider calls. All saved states (including voided financial records, closed chores, past meals/events and expired communications) are searchable and labeled. Household membership and targeted announcement/poll audience rules match detail reads. Newest creation/publication first, then type and ID descending. Cursor retains PostgreSQL microseconds and is bound to verified caller, household, normalized query and type; this is a live read, not a frozen snapshot across pages. Private queries/results must not be cached or logged. No counts from inaccessible records are returned.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 120 }
+          description: Trimmed literal text; 2–120 characters, with no NUL characters
+        - name: type
+          in: query
+          schema: { type: string, enum: [all, expense, bill, settlement, meal, chore, shopping, event, announcement, poll], default: all }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: cursor
+          in: query
+          schema: { type: string, maxLength: 1024 }
+          description: Opaque continuation for the same query, type, caller and household
+      responses:
+        '200':
+          description: No-store page of authorized saved records
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results, nextCursor]
+                properties:
+                  results:
+                    type: array
+                    maxItems: 50
+                    items:
+                      type: object
+                      required: [id, type, title, snippet, status, createdAt, href]
+                      properties:
+                        id: { type: string, format: uuid }
+                        type: { type: string, enum: [expense, bill, settlement, meal, chore, shopping, event, announcement, poll] }
+                        title: { type: string, maxLength: 240 }
+                        snippet: { type: string, maxLength: 180 }
+                        status: { type: string }
+                        createdAt: { type: string, format: date-time }
+                        href: { type: string, description: Relative path to the normal authorized record view }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503':
+          description: Search exceeded its bounded database time limit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
   /v1/households/{id}/assistant:
     get:
       summary: Read assistant availability for an active household member
@@ -23,7 +76,8 @@ paths:
                 required: [naturalLanguageEnabled, actionDraftsEnabled, provider, requiresPrivacyAcknowledgement]
                 properties:
                   naturalLanguageEnabled: { type: boolean }
-                  actionDraftsEnabled: { type: boolean, description: Local meal and announcement drafting is independent of Gemini configuration }
+                  actionDraftsEnabled: { type: boolean, description: Local drafts are independent of Gemini configuration; supportedDraftKinds identifies available action kinds }
+                  supportedDraftKinds: { type: array, items: { type: string, enum: [meal, announcement, shopping, chore, expense, bill] } }
                   provider: { type: [string, 'null'], enum: [gemini, null] }
                   requiresPrivacyAcknowledgement: { type: boolean }
         '401': { $ref: '#/components/responses/Unauthenticated' }
@@ -31,7 +85,7 @@ paths:
   /v1/households/{id}/assistant/drafts:
     post:
       summary: Prepare a local meal-check or announcement draft without publishing
-      description: Authorized active household members only. Common English plan/create meal and announce/post announcement commands are interpreted inside HouseMate; the message and member details never go to Gemini, consume model quota, or create records. Unclear times/deadlines/audiences require editing. Drafts are returned to the client and are not persisted. Null draft means a read-only question or unrecognized non-action syntax; recognized unsupported, negated or multiple action commands return 400 and must never fall back to Gemini; no provider fallback occurs here. The client reviews and explicitly confirms through the existing idempotent meals or announcements POST endpoint, whose membership, audience, time and content validations remain authoritative. Notifications are generated only by a successful publication. Private input/output must not be cached or logged.
+      description: Authorized active household members only. Common English meal, announcement, shopping, chore, expense and bill commands are interpreted inside HouseMate; the message and member details never go to Gemini, consume model quota, or create records. Unclear times/deadlines/audiences require editing. Drafts are returned to the client and are not persisted. Missing or ambiguous fields require explicit editing. Money drafts never contain AI-calculated shares; the client must obtain the existing expense/bill API preview before confirmation. New clients opt into additional kinds with allowedKinds; omitted allowedKinds preserves meal/announcement-only replies for older clients. Shopping/chore confirmation uses optional durable idempotency keys on normal creation endpoints after the additive action-create migration; their saved creator/time/key/hash record is the execution trace. Null draft means a read-only question or unrecognized non-action syntax; recognized unsupported, negated or multiple action commands return 400 and must never fall back to Gemini; no provider fallback occurs here. The client reviews and explicitly confirms through the normal meals, announcements, shopping, chores, expenses or bills POST endpoint, whose membership, audience, time and content validations remain authoritative. Notifications are generated only by a successful publication. Private input/output must not be cached or logged.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
       requestBody:
@@ -44,6 +98,7 @@ paths:
               required: [message]
               properties:
                 message: { type: string, minLength: 1, maxLength: 1000 }
+                allowedKinds: { type: array, minItems: 1, maxItems: 6, uniqueItems: true, items: { type: string, enum: [meal, announcement, shopping, chore, expense, bill] }, description: Defaults to meal and announcement for backward compatibility }
       responses:
         '200':
           description: No-store unsaved draft with fields requiring clarification, or null
@@ -646,7 +701,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ChoreDraft' }
+            schema: { $ref: '#/components/schemas/ChoreCreate' }
       responses:
         '201':
           description: Created chore
@@ -942,7 +997,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ShoppingDraft' }
+            schema: { $ref: '#/components/schemas/ShoppingCreate' }
       responses:
         '201':
           description: Created item
@@ -2021,7 +2076,7 @@ components:
       type: object
       required: [kind, householdId, timezone, generatedAt, fields, members, recipientIds, unresolvedFields, notes]
       properties:
-        kind: { type: string, enum: [meal, announcement] }
+        kind: { type: string, enum: [meal, announcement, shopping, chore, expense, bill] }
         householdId: { type: string, format: uuid }
         timezone: { type: string }
         generatedAt: { type: string, format: date-time }
@@ -2065,6 +2120,63 @@ components:
                 priority: { type: string, enum: [normal, important, urgent] }
                 requiresAcknowledgement: { type: boolean }
                 expiresAtLocal: { type: [string, 'null'] }
+        - properties:
+            kind: { const: shopping }
+            fields:
+              type: object
+              description: Editable unsaved values; empty strings or zero amounts require completion before normal API validation
+              required: [title, quantity, unit, note, priority, assignedBuyerMemberId, estimatedPriceMinor]
+              properties:
+                title: { type: string }
+                quantity: { type: [number, 'null'] }
+                unit: { type: [string, 'null'] }
+                note: { type: [string, 'null'] }
+                priority: { type: string }
+                assignedBuyerMemberId: { type: [string, 'null'] }
+                estimatedPriceMinor: { type: [integer, 'null'] }
+        - properties:
+            kind: { const: chore }
+            fields:
+              type: object
+              description: Editable unsaved values; empty strings or zero amounts require completion before normal API validation
+              required: [title, note, dueAtLocal, assigneeMemberId]
+              properties:
+                title: { type: string }
+                note: { type: [string, 'null'] }
+                dueAtLocal: { type: string }
+                assigneeMemberId: { type: string }
+        - properties:
+            kind: { const: expense }
+            fields:
+              type: object
+              description: Editable unsaved values; empty strings or zero amounts require completion before normal API validation
+              required: [title, amountMinor, currency, spentOn, payerMemberId, split]
+              properties:
+                title: { type: string }
+                amountMinor: { type: integer }
+                currency: { type: string }
+                spentOn: { type: string }
+                payerMemberId: { type: string }
+                split: { $ref: '#/components/schemas/ExpenseSplit' }
+        - properties:
+            kind: { const: bill }
+            fields:
+              type: object
+              description: Editable unsaved values; empty strings or zero amounts require completion before normal API validation
+              required: [title, billType, provider, amountMinor, currency, periodStart, periodEnd, dueDate, payerMemberId, paymentStatus, sharedParticipantIds, adjustments]
+              properties:
+                title: { type: string }
+                billType: { type: string }
+                provider: { type: string }
+                amountMinor: { type: integer }
+                currency: { type: string }
+                periodStart: { type: string }
+                periodEnd: { type: string }
+                dueDate: { type: string }
+                payerMemberId: { type: string }
+                paymentStatus: { type: string }
+                sharedParticipantIds: { type: array, items: { type: string, format: uuid } }
+                adjustments: { type: array, items: { $ref: '#/components/schemas/BillAdjustment' } }
     NotificationPage:
       type: object
       required: [notifications, unreadCount, nextCursor]
@@ -2299,6 +2411,16 @@ components:
             notGoing: { type: integer, minimum: 0 }
             awaiting: { type: integer, minimum: 0 }
         canRespond: { type: boolean }
+    ChoreCreate:
+      type: object
+      additionalProperties: false
+      required: [title, note, dueAtLocal, assigneeMemberId]
+      properties:
+        idempotencyKey: { type: string, format: uuid, description: Optional durable confirmation key; different payload returns 409; identical retry returns current saved record }
+        title: { type: string, minLength: 1, maxLength: 160 }
+        note: { type: [string, 'null'], maxLength: 500 }
+        dueAtLocal: { type: string, description: 'YYYY-MM-DDTHH:mm in household timezone' }
+        assigneeMemberId: { type: string, format: uuid }
     ChoreDraft:
       type: object
       additionalProperties: false
@@ -2351,6 +2473,18 @@ components:
                 targetDisplayName: { type: string }
                 createdAt: { type: string, format: date-time }
                 canRespond: { type: boolean }
+    ShoppingCreate:
+      type: object
+      required: [title, quantity, unit, note, priority, assignedBuyerMemberId, estimatedPriceMinor]
+      properties:
+        idempotencyKey: { type: string, format: uuid, description: Optional durable confirmation key; different payload returns 409; identical retry returns current saved record }
+        title: { type: string, minLength: 1, maxLength: 160 }
+        quantity: { type: [number, 'null'], minimum: 0.001, maximum: 999999999, description: 'At most three decimal places' }
+        unit: { type: [string, 'null'], maxLength: 40 }
+        note: { type: [string, 'null'], maxLength: 500 }
+        priority: { type: string, enum: [low, normal, high] }
+        assignedBuyerMemberId: { type: [string, 'null'], format: uuid }
+        estimatedPriceMinor: { type: [integer, 'null'], minimum: 0, maximum: 999999999999 }
     ShoppingDraft:
       type: object
       required: [title, quantity, unit, note, priority, assignedBuyerMemberId, estimatedPriceMinor]
