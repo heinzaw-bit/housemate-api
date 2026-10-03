@@ -285,6 +285,7 @@ async function drill(path) {
   const passwordPath = resolve(drillRoot, 'password');
   writeFileSync(passwordPath, password, { mode: 0o600 });
   // Each drill initializes a brand-new cluster; callers cannot supply a restore DB URL.
+  console.log('Restore stage: initialize isolated PostgreSQL');
   await command('initdb', [
     '-D',
     cluster,
@@ -299,13 +300,16 @@ async function drill(path) {
   let running = false;
   let client;
   try {
+    console.log('Restore stage: start isolated PostgreSQL');
     await command('pg_ctl', [
       '-D',
       cluster,
       '-l',
       resolve(drillRoot, 'postgres.log'),
       '-o',
-      `-h 127.0.0.1 -p ${port}`,
+      // Debian's default socket directory belongs to the system postgres user.
+      // This disposable cluster uses TCP loopback only, including on CI runners.
+      `-h 127.0.0.1 -p ${port} -c unix_socket_directories=`,
       '-w',
       'start',
     ]);
@@ -325,6 +329,7 @@ async function drill(path) {
     await client.query('CREATE SCHEMA extensions');
     await client.query('CREATE EXTENSION pgcrypto WITH SCHEMA extensions');
     await client.query('CREATE EXTENSION "uuid-ossp" WITH SCHEMA extensions');
+    console.log('Restore stage: restore archive and verify snapshot');
     const restoreEnv = {
       PGHOST: '127.0.0.1',
       PGPORT: String(port),
@@ -368,6 +373,7 @@ async function drill(path) {
     client = undefined;
     // Exercise the actual money, authorization, edits and audit repositories against the restored data.
     const connectionString = `postgresql://postgres:${encodeURIComponent(password)}@127.0.0.1:${port}/postgres`;
+    console.log('Restore stage: verify API and financial history');
     for (const script of [
       'smoke-dashboard.mjs',
       'smoke-financial-edits.mjs',
@@ -400,6 +406,7 @@ async function drill(path) {
       });
     }
     // Also test the recovery runbook with already-provisioned managed schemas.
+    console.log('Restore stage: verify managed-schema recovery SQL');
     client = new pg.Client(options);
     await client.connect();
     await client.query('DROP SCHEMA housemate CASCADE');
