@@ -108,8 +108,9 @@ See [production operations](OPERATIONS.md) for Sentry setup, public database
 readiness, uptime alerts, encrypted backups, tested isolated restore drills and
 the new-project recovery runbook. `npm run uptime:plan|uptime:configure|uptime:status`
 manages public HTTP checks; `npm run backup:create` and `npm run backup:drill -- <file>`
-never restore into production. Offsite backup storage/scheduling and live Sentry
-activation require operator configuration.
+never restore into production. Offsite backup scheduling is active and its first
+cloud upload/restore passed on 2026-10-03. Sentry reporting is active; alert rules
+and actual owner email receipt still need operator setup/acceptance.
 
 `openapi.yaml` describes the implemented endpoints. Clients should pin a compatible contract version. Production deployments must set `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY`, terminate TLS at the edge, and allow the API to reach Supabase Auth and PostgreSQL. Never expose the database connection URL or an administrative key to a client.
 
@@ -150,6 +151,10 @@ See [OPERATIONS.md](OPERATIONS.md) for the private Vercel Blob backup workflow,
 daily 03:17 Asia/Bangkok schedule, seven daily/four weekly/three monthly
 retention and isolated weekly restore checks. Activation requires separately
 provisioned GitHub Actions secrets and `BACKUP_AUTOMATION_ENABLED=true`.
+Those approved secrets and the activation flag are configured as of 2026-10-03;
+cloud run 37089625945 passed upload, verified private download and full 66-table
+isolated restore. The first scheduled run and owner alert email receipt remain
+separate checks. Follow the manual operator checklist in OPERATIONS.md.
 
 `npm run backup:offsite`, `backup:offsite-status`, and `backup:offsite-drill`
 support local operator runs. `npm run uptime:status -- --history` prints only

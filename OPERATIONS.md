@@ -2,8 +2,9 @@
 
 ## Progress — 2026-10-03 (Asia/Bangkok)
 
-- Push is enabled in production. The user deferred actual Android/iPhone
-  background delivery and deep-link acceptance until the phones are available.
+- Push is enabled in production. The user confirmed Android Chrome phone
+  delivery and notification-tap opening after the 2026-10-03 web fix. iPhone
+  acceptance is still being clarified; other phone acceptance checks are separate.
 - Web uptime job 8546967 was found disabled with status 6 (response too large).
   The landing page returned 200 but was 66,264 bytes. HEAD still failed at the
   provider; a small, no-store web-runtime `GET /api/health` endpoint replaces the
@@ -23,11 +24,23 @@
   financial edit/void history and managed-schema recovery SQL. Missing stdout
   options and omitted namespace creation in schema-filtered recovery SQL were
   fixed. Managed Supabase/Auth service cutover is still untested.
-- Private DreamyDay Blob store `housemate-backups` in bom1 is created and has
-  no project connections. Offsite scripts and the scheduled workflow are
-  implemented, but cloud activation/upload require the store's read/write token
-  and separately authorized GitHub secret provisioning. The workflow stays
-  gated until `BACKUP_AUTOMATION_ENABLED=true`; no unattended backup is claimed.
+- Private DreamyDay Blob store `housemate-backups` in bom1 is connected only to
+  API Development. The user approved reading its generated server token and
+  provisioning private API GitHub Actions secrets for that token, the existing
+  production database URL and the retained recovery key. No secret is in Git,
+  the web client or Blob archives. `BACKUP_AUTOMATION_ENABLED=true` is verified.
+- Initial cloud upload passed at 09:17:41; its Linux restore failed. The runner
+  fix disables the system Unix socket directory and uses authenticated loopback
+  TCP for the disposable cluster. API commit `5d28806` passed lint/typecheck,
+  75 tests and build, plus clean CI 37089625330. The downloaded first archive
+  passed a full local restore at 09:22:13 (66 tables).
+- Cloud rerun 37089625945 succeeded: backup captured at 09:23:53, private access,
+  download/decryption/checksum and retention verified, then full isolated restore
+  passed at 09:25:11. All 66 table counts/digests, Auth references, RLS, financial
+  API/history and managed-schema recovery SQL checks passed. Inventory is fresh:
+  one 498,706-byte archive. Daily 03:17 Bangkok scheduling is enabled; the first
+  scheduled run has not occurred yet. Saturday and manual runs include full
+  restore checks. Managed Supabase/Auth cutover and email receipt remain untested.
 
 ## Verified state — 2026-10-01 (Asia/Bangkok)
 
@@ -137,9 +150,10 @@ Git and separate from offsite copies; losing it prevents recovery. On Windows,
 restrict ACLs on the key, backup and drill directories to the operator account;
 POSIX file modes alone do not set Windows ACLs.
 
-The offsite destination is private Vercel Blob. Cloud credentials and activation
-remain pending; recovery point is the last successful manual backup until a
-successful cloud run is verified.
+The offsite destination is private Vercel Blob. Cloud credentials and daily
+scheduling are active as of 2026-10-03; the first manual cloud run and downloaded
+archive restore passed. Recovery point is the latest verified archive, not the
+next scheduled time. Check `backup:offsite-status` for freshness.
 
 ### Daily encrypted offsite workflow
 
@@ -167,6 +181,29 @@ isolated PostgreSQL 17 cluster; production is never a restore target. Check the
 workflow's success and sanitized restore report before calling activation done.
 Enable GitHub Actions failure notifications in the owner's account; email
 receipt and silently missed scheduled runs are not established by a green run.
+
+### Manual operator checklist
+
+1. In GitHub Settings → Notifications → System → Actions, enable Email and
+   Only notify for failed workflows. Watch the private API repository as needed.
+   See [GitHub's notification instructions](https://docs.github.com/en/enterprise-cloud%40latest/subscriptions-and-notifications/how-tos/managing-github-actions-notifications).
+2. Copy the existing `.run/keys/backup.key` into a password manager's encrypted
+   attachment or another separately protected location outside this computer,
+   GitHub and Blob. Preserve the exact file; do not regenerate or paste it into
+   chat. Losing every key copy prevents decryption.
+3. Confirm the cron-job.org owner failure/recovery emails for the isolated
+   HouseMate monitor test around 08:10–08:13 Bangkok on 2026-10-03. Check Spam.
+   Provider history passed; inbox receipt remains a manual check. If no messages
+   can be found, arrange another isolated test rather than interrupting live jobs.
+4. Choose Sentry token-based alert setup or dashboard guidance. If providing
+   API access, create an organization internal integration with alert read/write
+   and organization/member/project read access; save its token privately as
+   `SENTRY_AUTH_TOKEN` in ignored `.env.monitoring`, preserving the existing DSNs.
+   Send only the organization dashboard URL (not the token) to identify its slug
+   and region. See [Sentry's token creation guide](https://docs.sentry.io/api/guides/create-auth-token/).
+5. After Sentry alerts are configured, confirm receipt of the controlled test
+   email. iPhone Home Screen push delivery and notification-tap testing remain
+   pending; Android was confirmed working.
 
 Each run creates an encrypted archive with verified TLS and a read-only exported
 snapshot, uploads privately without overwriting, downloads from origin, verifies
