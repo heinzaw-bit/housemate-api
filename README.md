@@ -129,9 +129,9 @@ To enable optional web push:
 2. Set `VAPID_SUBJECT` to a real public `mailto:` contact or HTTPS support URL that you control, and keep `VAPID_PRIVATE_KEY` on the API only. The API exposes only the public key to authenticated clients. Do not invent a contact or use localhost as the contact URL.
 3. Restart the API, then use Notifications → Settings → Enable push in this browser. Production web requires HTTPS. Some mobile browsers require installing the PWA. Allow API outbound access to the supported browser push providers (Google, Mozilla, Apple, Windows).
 
-Without a complete VAPID/contact configuration, `/v1/push-config` reports disabled and device registration returns 503. The current local setup has keys but no user-provided public contact, so live push is disabled. Inbox, preferences, and reminder generation remain active. Lock-screen text is generic and contains no amounts, household names, or private messages. Devices belong to one account across households; new opt-in does not replay old notifications. Existing subscriptions refresh on a signed-in visit, but a missing or disabled subscription requires explicit Enable again. Native mobile push, email, SMS, and LINE providers are not implemented.
+Without a complete VAPID/contact configuration, `/v1/push-config` reports disabled and device registration returns 503. Production push was configured and activated on 2026-10-02 using the user-provided contact and existing VAPID pair; each browser still requires explicit opt-in. Private local configuration was synchronized without exposing values. Inbox, preferences, and reminder generation remain active. Lock-screen text is generic and contains no amounts, household names, or private messages. Devices belong to one account across households; new opt-in does not replay old notifications. Existing subscriptions refresh on a signed-in visit, but a missing or disabled subscription requires explicit Enable again. Native mobile push, email, SMS, and LINE providers are not implemented.
 
-`npm run smoke:notifications` uses an isolated transaction and simulated push transport to check recipient privacy, retry deduplication, read ownership, cursor precision, preferences, deadline reminders, device ownership, quiet deferral, disabling, invalid-subscription handling, and RLS, then rolls back. It never contacts a browser push service. Actual device delivery still needs checking once a contact is configured.
+`npm run smoke:notifications` uses an isolated transaction and simulated push transport to check recipient privacy, retry deduplication, read ownership, cursor precision, preferences, deadline reminders, device ownership, quiet deferral, disabling, invalid-subscription handling, and RLS, then rolls back. It never contacts a browser push service. Actual device delivery still needs checking after each browser explicitly opts in; production setup alone is not delivery evidence.
 
 ## Dashboard verification
 
@@ -144,3 +144,16 @@ The assistant prepares local unsaved shopping, chore, expense and hybrid-bill dr
 Before releasing this API, run `npm run migrate:action-create` against the intended database using its private environment. It applies the CLI-generated `supabase/migrations/20261001180100_action_create_idempotency.sql` once in a transaction with a bounded lock timeout, rejects partially applied columns and leaves existing records/permissions/RLS intact. Shopping/chore create requests accept an optional `idempotencyKey`; identical household/creator/key/payload retries return the current record, changed input returns 409, and legacy keyless requests remain valid. Existing actor/time/ID and immutable key/hash are the execution trace. Notifications fire only for the original insert. Release API before web. This migration was applied to the configured production database on 2026-10-02.
 
 `npm run smoke:assistant-create` verifies the migration and shopping/chore repositories against empty isolated copies in a temporary schema, rolls everything back, and never changes production household data/schema or invokes notification/provider workers. It checks retry/conflict scope, single creation side effects, current state after edits, legacy callers, active members and creator/time/hash evidence. It does not claim live notification delivery or real parallel-request/device acceptance. Existing financial tests verify deterministic allocation; client tests verify that preview precedes explicit confirmation.
+## Offsite backups and alert drills
+
+See [OPERATIONS.md](OPERATIONS.md) for the private Vercel Blob backup workflow,
+daily 03:17 Asia/Bangkok schedule, seven daily/four weekly/three monthly
+retention and isolated weekly restore checks. Activation requires separately
+provisioned GitHub Actions secrets and `BACKUP_AUTOMATION_ENABLED=true`.
+
+`npm run backup:offsite`, `backup:offsite-status`, and `backup:offsite-drill`
+support local operator runs. `npm run uptime:status -- --history` prints only
+sanitized execution metadata. The `uptime:alert-start`, `uptime:alert-recover`,
+`uptime:alert-status` and `uptime:alert-cleanup` commands exercise owner failure
+and recovery alerts through a temporary job without interrupting production.
+Provider configuration and scheduled outcomes do not prove email receipt.

@@ -1,5 +1,34 @@
 # Production operations
 
+## Progress — 2026-10-03 (Asia/Bangkok)
+
+- Push is enabled in production. The user deferred actual Android/iPhone
+  background delivery and deep-link acceptance until the phones are available.
+- Web uptime job 8546967 was found disabled with status 6 (response too large).
+  The landing page returned 200 but was 66,264 bytes. HEAD still failed at the
+  provider; a small, no-store web-runtime `GET /api/health` endpoint replaces the
+  landing page check. API readiness and the reminder schedule stayed healthy.
+  The repaired web monitor recorded scheduled HTTP 200 at 08:20:03 (747 ms).
+- Isolated scheduler alert job 8567732 verified scheduled HTTP 404 failure at
+  08:10:36/08:11:02 and HTTP 200 recovery at 08:12:17/08:13:02. It was then
+  deleted. Only owner-email alerts were enabled. Actual email receipt remains
+  unverified; the user deferred Sentry alert access/configuration.
+- A fresh encrypted production backup was captured at 08:15:47: 66 tables,
+  Storage object count zero. The existing key had an empty access list; native
+  ACL tooling added Read permission only for its existing MSI\\ADMIN owner.
+  Inheritance and access for other accounts were not enabled. The existing
+  recovery key was retained.
+- Its complete isolated restore passed at 08:25:04 in 16 seconds: all 66 table
+  counts/digests, Auth identity references, RLS, dashboard/household isolation,
+  financial edit/void history and managed-schema recovery SQL. Missing stdout
+  options and omitted namespace creation in schema-filtered recovery SQL were
+  fixed. Managed Supabase/Auth service cutover is still untested.
+- Private DreamyDay Blob store `housemate-backups` in bom1 is created and has
+  no project connections. Offsite scripts and the scheduled workflow are
+  implemented, but cloud activation/upload require the store's read/write token
+  and separately authorized GitHub secret provisioning. The workflow stays
+  gated until `BACKUP_AUTOMATION_ENABLED=true`; no unattended backup is claimed.
+
 ## Verified state — 2026-10-01 (Asia/Bangkok)
 
 - Production API and web Sentry variables are configured and deployed. Both
@@ -13,11 +42,9 @@
   archive restore completed at 00:51:58 in 17 seconds: all 65 table counts/digests,
   Auth references, RLS and three API/financial smoke checks passed. Production
   was read only. Storage object count was zero.
-- The additional recovery-SQL phase below was added after that passing drill
-  and has **not** completed. Windows ACL tightening prevents the Codex sandbox
-  PostgreSQL process from accessing temporary drill files. Automatic approval
-  review rejected restoring inherited permissions; narrower access to temporary
-  restore folders awaits the user's approval. Key/backup ACLs remain restricted.
+- The additional recovery-SQL phase was still pending on 2026-10-01. The latest
+  2026-10-03 drill above completes it locally, without restoring broad inherited
+  access. A managed Supabase cutover remains untested.
 - Offsite backup storage, unattended backups and a managed Supabase cutover
   remain unconfigured or untested.
 
@@ -66,7 +93,8 @@ then enables them. No job/database credentials are attached to uptime requests.
 
 - API: `/health/ready`, read-only SELECT 1, five-second query/production connection
   timeout, no-store, only `ok` or `unavailable`. `/health` remains process liveness.
-- Web: `/`, checking the actual public page's HTTP availability.
+- Web: `/api/health`, checking the Next.js runtime through a small no-store
+  response. This avoids the landing page exceeding the provider's size limit.
 - Every five minutes, 30-second timeout, redirects fail, response storage off.
 - Account-email alerts: first failure, recovery, automatic disablement and
   certificate expiry. Native alerts run independently of this computer.
@@ -109,10 +137,78 @@ Git and separate from offsite copies; losing it prevents recovery. On Windows,
 restrict ACLs on the key, backup and drill directories to the operator account;
 POSIX file modes alone do not set Windows ACLs.
 
-Copy encrypted backups to an approved offsite destination daily and before
-migrations. Suggested retention: seven daily, four weekly, three monthly. No
-offsite destination or unattended backup schedule is configured yet. Recovery
-point is the last successful manual backup, with no automatic 24-hour guarantee.
+The offsite destination is private Vercel Blob. Cloud credentials and activation
+remain pending; recovery point is the last successful manual backup until a
+successful cloud run is verified.
+
+### Daily encrypted offsite workflow
+
+The private API repository's `.github/workflows/backup.yml` runs at 03:17 Bangkok
+time (20:17 UTC). Scheduled starts can be delayed by GitHub. It checks out main
+with pinned actions, installs/builds without production secrets, then uses only
+these repository Actions secrets for the backup step:
+
+| Secret | Source |
+| --- | --- |
+| `BACKUP_DATABASE_URL` | Existing production database connection |
+| `BACKUP_RECOVERY_KEY_BASE64` | Base64 encoding of the existing 32-byte recovery key |
+| `BACKUP_BLOB_READ_WRITE_TOKEN` | Dedicated private `housemate-backups` store token |
+
+Provision secrets through a private operator session/stdin, never logs, chat,
+command arguments, workflow YAML or Git. Approve that transfer separately. Keep
+a separately protected recovery-key copy outside GitHub and Blob: loss of the
+key prevents recovery. The key is not uploaded with the archive. Main-branch
+workflow execution uses read-only repository permissions and serializes backups.
+
+Only after secrets are verified, set repository variable
+`BACKUP_AUTOMATION_ENABLED=true` and dispatch an initial run. Its first/manual
+run and Saturday runs restore the **downloaded offsite** archive into a fresh
+isolated PostgreSQL 17 cluster; production is never a restore target. Check the
+workflow's success and sanitized restore report before calling activation done.
+Enable GitHub Actions failure notifications in the owner's account; email
+receipt and silently missed scheduled runs are not established by a green run.
+
+Each run creates an encrypted archive with verified TLS and a read-only exported
+snapshot, uploads privately without overwriting, downloads from origin, verifies
+byte SHA-256/authenticated decryption/archive checksum, and checks that an
+anonymous HEAD request is denied. Retention begins only after all checks pass.
+It keeps the newest backup in each of seven daily, four weekly and three monthly
+Bangkok-time buckets (overlapping points share one file, at most 14). Only strict
+`housemate/production/v1/TIMESTAMP.hmbak` paths are eligible for removal. Foreign
+objects are preserved and counted against the budget. The script refuses an
+archive over 16 MiB or an upload that would exceed 256 MiB total, preserving
+headroom below Hobby's included storage. If Storage objects appear, unattended
+validation fails until object-byte backup is added.
+
+Local operators use ignored `.env.backup` containing `BLOB_READ_WRITE_TOKEN`:
+
+```powershell
+npm run backup:offsite
+npm run backup:offsite-status
+npm run backup:offsite-drill
+```
+
+Status is read only and treats the latest archive as stale after 36 hours.
+Cloud runs use `BACKUP_DATABASE_URL` and canonical `BACKUP_RECOVERY_KEY_BASE64`;
+they never generate a new ephemeral recovery key. No archives, decrypted files
+or recovery keys are uploaded as GitHub artifacts or caches.
+
+### Repeatable owner-alert test
+
+```powershell
+npm run uptime:alert-start
+# Wait for the next scheduled minute, then:
+npm run uptime:alert-recover
+# After a scheduled recovery:
+npm run uptime:alert-cleanup
+```
+
+`uptime:alert-status` prints sanitized history. A uniquely named temporary job
+targets an intentionally nonexistent API path (404) then public `/health` (200),
+attaches no credentials, expires after one hour and is removed after verified
+recovery. It never stops services or modifies the production reminder worker.
+Provider states and configured email channels are evidence of the alert trigger,
+not delivery to an inbox. Confirm failure and recovery emails separately.
 
 ### Tested local drill
 

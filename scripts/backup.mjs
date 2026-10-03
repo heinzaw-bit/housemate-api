@@ -19,6 +19,13 @@ const maxBytes = 512 * 1024 * 1024;
 const schemas = ['housemate', 'auth', 'storage'];
 const identifier = (value) => '"' + value.replaceAll('"', '""') + '"';
 
+// A schema-filtered pg_restore can omit the namespace creation itself.
+function recoverySchemaSql(sql) {
+  return /CREATE SCHEMA (?:"housemate"|housemate);/.test(sql.toString())
+    ? sql
+    : Buffer.concat([Buffer.from('CREATE SCHEMA housemate;\n'), sql]);
+}
+
 export function seal(payload, key) {
   const nonce = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, nonce);
@@ -46,7 +53,10 @@ export function unseal(bytes, key) {
 
 function binary(name) {
   const bin =
-    process.env.PG_BIN || resolve(runDirectory, 'tools/pg17/pgsql/bin');
+    process.env.PG_BIN ||
+    (process.platform === 'win32'
+      ? resolve(runDirectory, 'tools/pg17/pgsql/bin')
+      : '/usr/lib/postgresql/17/bin');
   return resolve(bin, name + (process.platform === 'win32' ? '.exe' : ''));
 }
 
@@ -59,6 +69,8 @@ function command(name, args, env = {}, input) {
       stdio: name === 'pg_ctl' ? 'ignore' : ['pipe', 'pipe', 'pipe'],
     });
     let size = 0;
+    let sqlState = '';
+    let missingSchema = '';
     const chunks = [];
     const timeout = setTimeout(() => {
       child.kill();
@@ -70,7 +82,22 @@ function command(name, args, env = {}, input) {
       else chunks.push(chunk);
     });
     // Raw PostgreSQL errors can contain rows, credentials and private query text.
-    child.stderr?.resume();
+    child.stderr?.on('data', (chunk) => {
+      // With psql VERBOSITY=sqlstate, retain only the five-character error code.
+      // Never expose raw SQL, record data, keys or provider/database messages.
+      const match = chunk.toString().match(/ERROR:\s+([A-Z0-9]{5})\b/);
+      if (match) sqlState = match[1];
+      const schema = chunk
+        .toString()
+        .match(/schema "([a-z_]+)" does not exist/);
+      if (
+        schema &&
+        ['housemate', 'auth', 'storage', 'extensions', 'public'].includes(
+          schema[1],
+        )
+      )
+        missingSchema = schema[1];
+    });
     child.on('error', () => {
       clearTimeout(timeout);
       reject(new Error(`${name} could not start; check PG_BIN`));
@@ -79,7 +106,9 @@ function command(name, args, env = {}, input) {
       clearTimeout(timeout);
       if (code !== 0 || size > maxBytes)
         reject(
-          new Error(`${name} failed (exit ${code}); private details withheld`),
+          new Error(
+            `${name} failed (exit ${code}${sqlState ? `, SQLSTATE ${sqlState}` : ''}${missingSchema ? `, missing schema ${missingSchema}` : ''}); private details withheld`,
+          ),
         );
       else fulfill(Buffer.concat(chunks));
     });
@@ -88,7 +117,14 @@ function command(name, args, env = {}, input) {
   });
 }
 
-function key(create = false) {
+export function recoveryKey(create = false) {
+  if (process.env.BACKUP_RECOVERY_KEY_BASE64) {
+    const encoded = process.env.BACKUP_RECOVERY_KEY_BASE64;
+    const value = Buffer.from(encoded, 'base64');
+    if (value.length !== 32 || value.toString('base64') !== encoded)
+      throw new Error('The recovery key must be canonical base64 for 32 bytes');
+    return value;
+  }
   const path =
     process.env.BACKUP_KEY_FILE || resolve(runDirectory, 'keys/backup.key');
   if (!existsSync(path) && create) {
@@ -127,12 +163,22 @@ async function checks(client, tables) {
   return output;
 }
 
-async function backup() {
-  const { loadConfig } = await import('../dist/config.js');
+export async function createBackup() {
   const { databasePoolOptions } = await import('../dist/database.js');
   const { supabaseDatabaseCa } = await import('../dist/supabase-ca.js');
-  const env = parseEnv(readFileSync(resolve(directory, '.env.vercel'), 'utf8'));
-  const config = loadConfig({ ...env, VERCEL: '1' });
+  const env = process.env.BACKUP_DATABASE_URL
+    ? {}
+    : parseEnv(readFileSync(resolve(directory, '.env.vercel'), 'utf8'));
+  const config = {
+    databaseUrl: process.env.BACKUP_DATABASE_URL || env.DATABASE_URL,
+    databaseSslCa: process.env.BACKUP_DATABASE_SSL_CA || env.DATABASE_SSL_CA,
+    serverless: true,
+  };
+  if (!config.databaseUrl)
+    throw new Error('Backup database configuration is missing');
+  // Validate an existing recovery key before reading production data. Cloud runs
+  // must never generate a new, unrecoverable key on an ephemeral runner.
+  const encryptionKey = recoveryKey(process.env.CI !== 'true');
   const client = new pg.Client({
     ...databasePoolOptions(config),
     query_timeout: 120000,
@@ -201,24 +247,18 @@ async function backup() {
       `housemate-${manifest.createdAt.replaceAll(/[:.]/g, '-')}.hmbak`,
     );
     mkdirSync(resolve(runDirectory, 'backups'), { recursive: true });
-    writeFileSync(destination, seal(payload, key(true)), {
+    writeFileSync(destination, seal(payload, encryptionKey), {
       flag: 'wx',
       mode: 0o600,
     });
-    console.log(
-      JSON.stringify(
-        {
-          backup: destination,
-          encrypted: true,
-          schemas,
-          tableCount: tables.length,
-          storageObjects: Number(manifest.storageObjectCount),
-          note: 'Copy backup offsite and keep the recovery key separately. Storage object bytes are not included.',
-        },
-        null,
-        2,
-      ),
-    );
+    return {
+      backup: destination,
+      encrypted: true,
+      schemas,
+      tableCount: tables.length,
+      storageObjects: Number(manifest.storageObjectCount),
+      note: 'Copy backup offsite and keep the recovery key separately. Storage object bytes are not included.',
+    };
   } finally {
     await client.end();
   }
@@ -227,7 +267,7 @@ async function backup() {
 async function drill(path) {
   const started = Date.now();
   const payload = JSON.parse(
-    unseal(readFileSync(resolve(path)), key()).toString(),
+    unseal(readFileSync(resolve(path)), recoveryKey()).toString(),
   );
   const archive = Buffer.from(payload.archive, 'base64');
   const manifest = payload.manifest;
@@ -373,18 +413,24 @@ async function drill(path) {
     client = undefined;
     const schemaSql = await command(
       'pg_restore',
-      ['--schema-only', '--schema=housemate', '--no-owner', '--no-acl'],
+      [
+        '--file=-',
+        '--schema-only',
+        '--schema=housemate',
+        '--no-owner',
+        '--no-acl',
+      ],
       {},
       archive,
     );
     const dataSql = await command(
       'pg_restore',
-      ['--data-only', '--no-owner', '--no-acl'],
+      ['--file=-', '--data-only', '--no-owner', '--no-acl'],
       {},
       archive,
     );
     const recoverySql = Buffer.concat([
-      schemaSql,
+      recoverySchemaSql(schemaSql),
       Buffer.from('\nSET session_replication_role=replica;\n'),
       dataSql,
       Buffer.from(
@@ -393,7 +439,12 @@ async function drill(path) {
     ]);
     await command(
       'psql',
-      ['--single-transaction', '--set=ON_ERROR_STOP=1'],
+      [
+        '--no-psqlrc',
+        '--single-transaction',
+        '--set=ON_ERROR_STOP=1',
+        '--set=VERBOSITY=sqlstate',
+      ],
       restoreEnv,
       recoverySql,
     );
@@ -443,7 +494,7 @@ async function drill(path) {
 
 async function unpack(path) {
   const payload = JSON.parse(
-    unseal(readFileSync(resolve(path)), key()).toString(),
+    unseal(readFileSync(resolve(path)), recoveryKey()).toString(),
   );
   const archive = Buffer.from(payload.archive, 'base64');
   if (
@@ -457,17 +508,27 @@ async function unpack(path) {
   // Supabase provisions managed auth/storage schemas; recover their data, not their DDL.
   const schemaSql = await command(
     'pg_restore',
-    ['--schema-only', '--schema=housemate', '--no-owner', '--no-acl'],
+    [
+      '--file=-',
+      '--schema-only',
+      '--schema=housemate',
+      '--no-owner',
+      '--no-acl',
+    ],
     {},
     archive,
   );
   const dataSql = await command(
     'pg_restore',
-    ['--data-only', '--no-owner', '--no-acl'],
+    ['--file=-', '--data-only', '--no-owner', '--no-acl'],
     {},
     archive,
   );
-  writeFileSync(resolve(destination, 'schema.sql'), schemaSql, { mode: 0o600 });
+  writeFileSync(
+    resolve(destination, 'schema.sql'),
+    recoverySchemaSql(schemaSql),
+    { mode: 0o600 },
+  );
   writeFileSync(resolve(destination, 'data.sql'), dataSql, { mode: 0o600 });
   writeFileSync(
     resolve(destination, 'manifest.json'),
@@ -493,7 +554,10 @@ if (
   const operation = process.argv[2];
   Promise.resolve()
     .then(() => {
-      if (operation === 'create') return backup();
+      if (operation === 'create')
+        return createBackup().then((report) =>
+          console.log(JSON.stringify(report, null, 2)),
+        );
       if (operation === 'drill' && process.argv[3])
         return drill(process.argv[3]);
       if (operation === 'unpack' && process.argv[3])

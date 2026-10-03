@@ -1,0 +1,60 @@
+name: Encrypted offsite backup
+
+on:
+  schedule:
+    # 03:17 Asia/Bangkok; GitHub's scheduler may delay a run.
+    - cron: '17 20 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-offsite-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    # Activation follows verified secret provisioning, avoiding broken nightly runs.
+    if: github.ref == 'refs/heads/main' && vars.BACKUP_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install dependencies and build without production secrets
+        run: |
+          npm ci
+          npm run build
+      - name: Install PostgreSQL 17 tools from the official PostgreSQL repository
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --silent --show-error -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          printf '%s\n' 'Types: deb' 'URIs: https://apt.postgresql.org/pub/repos/apt' 'Suites: noble-pgdg' 'Architectures: amd64' 'Components: main' 'Signed-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc' | sudo tee /etc/apt/sources.list.d/housemate-pgdg.sources >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-17
+      - name: Encrypt, upload privately, verify download and apply retention
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_RECOVERY_KEY_BASE64: ${{ secrets.BACKUP_RECOVERY_KEY_BASE64 }}
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BACKUP_BLOB_READ_WRITE_TOKEN }}
+          PG_BIN: /usr/lib/postgresql/17/bin
+        run: node scripts/offsite-backup.mjs run
+      - name: Restore the downloaded offsite archive into an isolated database
+        # Every run checks authenticated decryption and archive checksum. Perform
+        # the full SQL/API restore drill on initial/manual runs and on Saturdays.
+        env:
+          BACKUP_RECOVERY_KEY_BASE64: ${{ secrets.BACKUP_RECOVERY_KEY_BASE64 }}
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BACKUP_BLOB_READ_WRITE_TOKEN }}
+          PG_BIN: /usr/lib/postgresql/17/bin
+          MANUAL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [ "$MANUAL_RUN" = 'true' ] || [ "$(TZ=Asia/Bangkok date +%u)" = '6' ]; then
+            node scripts/offsite-backup.mjs drill
+          fi
+      # No archive, key, dump or database files are uploaded to GitHub artifacts.

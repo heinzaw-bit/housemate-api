@@ -47,8 +47,15 @@
     "uptime:plan": "node scripts/uptime.mjs plan",
     "uptime:configure": "node scripts/uptime.mjs configure",
     "uptime:status": "node scripts/uptime.mjs status",
+    "uptime:alert-start": "node scripts/uptime.mjs alert-start",
+    "uptime:alert-status": "node scripts/uptime.mjs alert-status",
+    "uptime:alert-recover": "node scripts/uptime.mjs alert-recover",
+    "uptime:alert-cleanup": "node scripts/uptime.mjs alert-cleanup",
     "backup:create": "npm run build && node scripts/backup.mjs create",
     "backup:drill": "npm run build && node scripts/backup.mjs drill",
+    "backup:offsite": "npm run build && node scripts/offsite-backup.mjs run",
+    "backup:offsite-status": "node scripts/offsite-backup.mjs status",
+    "backup:offsite-drill": "npm run build && node scripts/offsite-backup.mjs drill",
     "smoke:search": "npm run build && node --env-file=.env scripts/smoke-search.mjs",
     "migrate:action-create": "npm run build && node --env-file=.env scripts/apply-action-create-migration.mjs",
     "smoke:assistant-create": "npm run build && node --env-file=.env scripts/smoke-assistant-create.mjs"
@@ -66,6 +73,7 @@
     "@types/node": "26.6.3",
     "@types/pg": "8.23.1",
     "@types/web-push": "3.6.4",
+    "@vercel/blob": "2.8.0",
     "supabase": "2.118.0",
     "typescript": "7.0.2"
   }

@@ -92,7 +92,7 @@ export function configurationMatches(actual, expected, compareSecret = false) {
   if (
     !actual ||
     actual.url !== expected.url ||
-    actual.requestMethod !== 0 ||
+    actual.requestMethod !== expected.requestMethod ||
     actual.requestTimeout !== 30 ||
     actual.redirectSuccess !== false ||
     actual.auth?.enable === true
@@ -100,7 +100,7 @@ export function configurationMatches(actual, expected, compareSecret = false) {
     return false;
   if (
     actual.schedule?.timezone !== expected.schedule.timezone ||
-    actual.schedule.expiresAt !== 0
+    actual.schedule.expiresAt !== expected.schedule.expiresAt
   )
     return false;
   if (

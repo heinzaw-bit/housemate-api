@@ -59,7 +59,7 @@ For example, [cron-job.org](https://cron-job.org/en/) supports minute schedules 
 
 Production API access must reach the app's own authorization checks. If Vercel Deployment Protection intercepts requests with its login page, configure the production API to be reachable by your web client and scheduler. Do not substitute a member access token for the job secret. Rotating CRON_SECRET requires updating both Vercel (and redeploying) and the scheduler.
 
-cron-job.org waits up to 30 seconds. The Vercel ceiling is a recovery limit, not a promise of a 30-second batch. Current live push is disabled, so jobs generate in-app reminders only. Once push is configured or the household workload grows, monitor job duration and queue backlog; choose a scheduler with a longer timeout if needed. Existing queue leases and deterministic keys permit retries, but provider acceptance/device delivery are not exactly once.
+cron-job.org waits up to 30 seconds. The Vercel ceiling is a recovery limit, not a promise of a 30-second batch. Production push configuration was enabled on 2026-10-02, so jobs also attempt delivery to opted-in devices. As the household workload grows, monitor job duration and queue backlog; choose a scheduler with a longer timeout if needed. Existing queue leases and deterministic keys permit retries, but provider acceptance/device delivery are not exactly once.
 
 ### Repeatable setup and status commands
 
@@ -96,7 +96,7 @@ Failure handling: 401 usually means a rotated/mismatched CRON_SECRET; 404 means 
 - The API's database pool uses verified TLS with one connection per warm instance; no migration runs during requests.
 - Follow the web app's `QUALITY_CHECKS.md` on Android Chrome and iPhone Safari for production installation, standalone launch, icons/safe areas, offline navigation, reconnection, interrupted confirmation, and updates with drafts open.
 
-No live Vercel deployment, scheduler account/job, or actual-device verification is performed by adding these files. Live web push remains disabled pending the user's real public contact.
+No live Vercel deployment, scheduler account/job, or actual-device verification is performed by adding these files. Production web push was subsequently activated on 2026-10-02 with an approved real contact and server-only VAPID configuration. Actual-device acceptance remains separate.
 
 ## References
 
