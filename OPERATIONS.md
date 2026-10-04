@@ -4,7 +4,15 @@
 
 - Push is enabled in production. The user confirmed Android Chrome phone
   delivery and notification-tap opening after the 2026-10-03 web fix. iPhone
-  acceptance is still being clarified; other phone acceptance checks are separate.
+  Safari installation and delivery were reported with about a 30-second delay.
+  Closed-app delivery/tap acceptance is still pending. Two recent Apple pushes
+  were provider-accepted in about 45–48 seconds without errors; the every-minute
+  scheduler is healthy. This timing does not demonstrate an iPhone defect.
+- Sentry production owner alerts are configured and readback verified for API
+  and web. Redacted synthetic new errors were accepted at 09:55:31–32; the web
+  rule fired at 09:55:54 and API at 09:55:56. The user confirmed both owner test
+  emails arrived. The regression path remains unverified. No application
+  deployment or household write was needed.
 - Web uptime job 8546967 was found disabled with status 6 (response too large).
   The landing page returned 200 but was 66,264 bytes. HEAD still failed at the
   provider; a small, no-store web-runtime `GET /api/health` endpoint replaces the
@@ -12,8 +20,9 @@
   The repaired web monitor recorded scheduled HTTP 200 at 08:20:03 (747 ms).
 - Isolated scheduler alert job 8567732 verified scheduled HTTP 404 failure at
   08:10:36/08:11:02 and HTTP 200 recovery at 08:12:17/08:13:02. It was then
-  deleted. Only owner-email alerts were enabled. Actual email receipt remains
-  unverified; the user deferred Sentry alert access/configuration.
+  deleted. Only owner-email alerts were enabled. The user subsequently confirmed
+  failure/recovery emails and provided the failure screenshot. Sentry
+  access/configuration and email receipt were also completed above.
 - A fresh encrypted production backup was captured at 08:15:47: 66 tables,
   Storage object count zero. The existing key had an empty access list; native
   ACL tooling added Read permission only for its existing MSI\\ADMIN owner.
@@ -41,6 +50,8 @@
   one 498,706-byte archive. Daily 03:17 Bangkok scheduling is enabled; the first
   scheduled run has not occurred yet. Saturday and manual runs include full
   restore checks. Managed Supabase/Auth cutover and email receipt remain untested.
+- The user enabled GitHub Actions failure emails. Actual GitHub failure email
+  receipt and the separate protected recovery-key copy remain pending.
 
 ## Verified state — 2026-10-01 (Asia/Bangkok)
 
@@ -78,7 +89,7 @@ Set production-only Vercel variables and redeploy:
 
 Reporting runs only in Vercel production. Keep automatic exposure of Vercel
 system environment variables enabled for the web production guard/commit release.
-No Sentry auth token is required. Source map uploads are disabled until a private
+Runtime reporting requires no Sentry auth token. Source map uploads are disabled until a private
 build token/project setup is supplied; browser stacks refer to built chunks.
 Never put a private Sentry auth token in `NEXT_PUBLIC_` variables.
 
@@ -92,11 +103,35 @@ locations, error type, release and API operation. Tracing, replay and log upload
 are disabled; API flushes are bounded to two seconds. Reporting failures do not
 change financial confirmation outcomes.
 
-Enable Sentry owner email alerts for new production issues/regressions. Validate
-with a synthetic non-private error and confirm it appears in Issues. No public
-crash-test route exists. Browser blockers/offline state or quotas can prevent
-delivery. The Sentry agent plugin requires a Codex restart and does not set app
-DSNs or deploy SDK code.
+### Owner alerts
+
+The existing US `dreamyday` project rules were updated in place on 2026-10-03:
+
+| Project | Alert | Linked issue monitor |
+| --- | --- | --- |
+| `housemate-api` | [HouseMate API: production errors](https://dreamyday.sentry.io/monitors/alerts/6093012/) | `10494760` |
+| `housemate-web` | [HouseMate web: production errors](https://dreamyday.sentry.io/monitors/alerts/6093036/) | `10494807` |
+
+Both rules are enabled and limited to `production`, with new-issue or regression
+triggers, an error-or-fatal filter, and a direct email action to the active owner.
+The repeat notification interval is 30 minutes per issue. Other organization
+rules were preserved. Local operator access uses `SENTRY_AUTH_TOKEN` in ignored
+`.env.monitoring`; keep it out of runtime/client variables, source and output.
+
+Controlled synthetic errors passed through the actual independent API/web
+sanitizers and were accepted with HTTP 200. At 09:55 Bangkok the rules' trigger
+timestamps advanced after submission. API event `5e0da6ba584c453cba598a31458126a9`
+and web event `10ba267ebda44fb290c1ceb3d5dec4f2` use synthetic verification frames
+and contain no household records or raw private exception details. The user
+confirmed both owner test emails arrived. Ingestion, triggering and inbox receipt
+are verified; a real browser crash and the resolve/recur regression path remain
+unverified. Resolve the synthetic test
+issues after receipt. A later controlled recurrence can verify regressions
+after the repeat interval; do not generate a new issue merely to repeat a
+successful ingestion check.
+
+No public crash-test route exists. Browser blockers/offline state or quotas can
+prevent delivery. The Sentry agent plugin does not set app DSNs or deploy SDK code.
 
 ## Uptime
 
@@ -186,23 +221,31 @@ receipt and silently missed scheduled runs are not established by a green run.
 
 1. In GitHub Settings → Notifications → System → Actions, enable Email and
    Only notify for failed workflows. Watch the private API repository as needed.
+   The user confirmed enabling these settings on 2026-10-03; failure email
+   receipt itself remains untested.
    See [GitHub's notification instructions](https://docs.github.com/en/enterprise-cloud%40latest/subscriptions-and-notifications/how-tos/managing-github-actions-notifications).
 2. Copy the existing `.run/keys/backup.key` into a password manager's encrypted
    attachment or another separately protected location outside this computer,
    GitHub and Blob. Preserve the exact file; do not regenerate or paste it into
    chat. Losing every key copy prevents decryption.
-3. Confirm the cron-job.org owner failure/recovery emails for the isolated
-   HouseMate monitor test around 08:10–08:13 Bangkok on 2026-10-03. Check Spam.
-   Provider history passed; inbox receipt remains a manual check. If no messages
-   can be found, arrange another isolated test rather than interrupting live jobs.
-4. Choose Sentry token-based alert setup or dashboard guidance. If providing
-   API access, create an organization internal integration with alert read/write
-   and organization/member/project read access; save its token privately as
-   `SENTRY_AUTH_TOKEN` in ignored `.env.monitoring`, preserving the existing DSNs.
-   Send only the organization dashboard URL (not the token) to identify its slug
-   and region. See [Sentry's token creation guide](https://docs.sentry.io/api/guides/create-auth-token/).
-5. After Sentry alerts are configured, confirm receipt of the controlled test
-   email. iPhone Home Screen push delivery and notification-tap testing remain
+   In Windows File Explorer, open the API folder, type `.run\keys` after its path
+   in the address bar, and copy `backup.key` (32 bytes). Store the exact file as
+   an encrypted attachment outside this computer, or on an encrypted USB drive.
+   Verify that the stored file can be downloaded/unlocked and its SHA-256 matches
+   the original before calling preservation complete; keep the original in place.
+3. The user confirmed the cron-job.org owner failure/recovery emails for the
+   isolated test around 08:10–08:13 Bangkok on 2026-10-03. The failure screenshot
+   corroborates receipt; recovery receipt is user-reported. Do not repeat the
+   successful isolated test.
+4. Both Sentry owner test emails from around 09:55–09:56 Bangkok on 2026-10-03
+   were confirmed received. Resolve the synthetic issues after reviewing them;
+   regression email acceptance remains separate. For future missing alerts,
+   inspect the owner's Sentry email preferences before arranging another test.
+5. iPhone delivery was reported with a roughly 30-second delay, compatible with
+   the once-per-minute worker. Leave the installed app closed without signing
+   out for 90 seconds after another member's new update; disable Focus,
+   Scheduled Summary and household quiet hours for this test. Record system
+   alert arrival and its tap destination. Closed-app/tap acceptance remains
    pending; Android was confirmed working.
 
 Each run creates an encrypted archive with verified TLS and a read-only exported

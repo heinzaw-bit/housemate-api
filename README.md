@@ -109,8 +109,9 @@ readiness, uptime alerts, encrypted backups, tested isolated restore drills and
 the new-project recovery runbook. `npm run uptime:plan|uptime:configure|uptime:status`
 manages public HTTP checks; `npm run backup:create` and `npm run backup:drill -- <file>`
 never restore into production. Offsite backup scheduling is active and its first
-cloud upload/restore passed on 2026-10-03. Sentry reporting is active; alert rules
-and actual owner email receipt still need operator setup/acceptance.
+cloud upload/restore passed on 2026-10-03. Sentry reporting and production owner
+alerts are active; synthetic new-error triggering and actual owner email receipt
+passed. A resolved-issue regression test still needs acceptance.
 
 `openapi.yaml` describes the implemented endpoints. Clients should pin a compatible contract version. Production deployments must set `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY`, terminate TLS at the edge, and allow the API to reach Supabase Auth and PostgreSQL. Never expose the database connection URL or an administrative key to a client.
 
