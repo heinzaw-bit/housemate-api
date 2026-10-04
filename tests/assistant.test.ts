@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { Announcement } from '../src/announcements.js';
 import { createApp } from '../src/application.js';
 import { HouseholdAssistant } from '../src/assistant.js';
 import { actionCommand, prepareActionDraft } from '../src/assistant-drafts.js';
@@ -92,11 +93,26 @@ function fixture(
     configured?: boolean;
     budgetError?: boolean;
     revoke?: boolean;
+    announcements?: Announcement[];
   } = {},
 ) {
   const calls: string[] = [];
   let accessCalls = 0;
   const data = {
+    announcements: {
+      list: async (
+        user: string,
+        selector: string,
+        scope: string,
+        limit: number,
+        offset: number,
+      ) => {
+        calls.push(
+          `announcements:${user}:${selector}:${scope}:${limit}:${offset}`,
+        );
+        return options.announcements ?? [];
+      },
+    },
     households: {
       listMembers: async () =>
         snapshot.balance.members.map((member) => ({
@@ -249,7 +265,7 @@ test('assistant authorizes before spending, validates input, scopes membership a
     assert.ok(result.json().sources[0].href.includes(`household=${id}`));
     assert.deepEqual(
       f.calls.slice(1).map((call) => call.split(':')[0]),
-      ['access', 'access', 'budget', 'provider', 'dashboard', 'access'],
+      ['access', 'dashboard', 'access'],
     );
   } finally {
     await f.app.close();
@@ -264,7 +280,10 @@ test('quick questions work without a key, do not contact the model, and describe
       headers,
     });
     assert.equal(config.json().naturalLanguageEnabled, false);
-    assert.equal((await f.ask({ message: 'balance' })).statusCode, 503);
+    assert.equal(
+      (await f.ask({ message: 'Explain a household idea' })).statusCode,
+      503,
+    );
     for (const topic of [
       'summary',
       'balance',
@@ -273,6 +292,8 @@ test('quick questions work without a key, do not contact the model, and describe
       'shopping',
       'meals',
       'events',
+      'board',
+      'announcements',
     ]) {
       const result = await f.ask({ topic });
       assert.equal(result.statusCode, 200);
@@ -306,7 +327,7 @@ test('duplicate names are clarified; unsupported writes never reach household se
     intent: { topic: 'unsupported', memberName: null, scope: null },
   });
   try {
-    const result = await ambiguous.ask({ message: 'balance' });
+    const result = await ambiguous.ask({ message: 'Explain that balance' });
     assert.equal(result.json().kind, 'clarification');
     assert.equal(result.json().rows.length, 0);
     assert.match(result.json().text, /More than one/);
@@ -346,7 +367,10 @@ test('limits stop provider requests and a revoked membership prevents an answer'
   const limited = fixture({ budgetError: true });
   const revoked = fixture({ revoke: true });
   try {
-    assert.equal((await limited.ask({ message: 'balance' })).statusCode, 429);
+    assert.equal(
+      (await limited.ask({ message: 'Explain that balance' })).statusCode,
+      429,
+    );
     assert.ok(!limited.calls.some((call) => call.startsWith('provider:')));
     assert.equal((await revoked.ask({ topic: 'balance' })).statusCode, 404);
   } finally {
@@ -423,11 +447,12 @@ test('Gemini gets only the general question, uses a fixed model and keeps the ke
     memberName: null,
     scope: null,
   });
-  assert.equal(payload.generationConfig?.maxOutputTokens, 400);
+  assert.equal(payload.generationConfig?.maxOutputTokens, 800);
   assert.equal(payload.generationConfig?.candidateCount, 1);
   assert.deepEqual(payload.generationConfig?.responseJsonSchema.required, [
     'topic',
     'scope',
+    'reply',
   ]);
   assert.deepEqual(payload.contents, [
     { role: 'user', parts: [{ text: 'How much do I owe?' }] },
@@ -494,7 +519,7 @@ test('privacy acknowledgement and private-input checks run before budget or Gemi
   const f = fixture();
   try {
     const consent = await f.ask({
-      message: 'balance',
+      message: 'Explain household finances',
       privacyAcknowledged: undefined,
     });
     assert.equal(consent.statusCode, 400);
@@ -741,6 +766,295 @@ test('ambiguous financial numbers remain unresolved and no allocation is guessed
         ),
       );
     }
+  } finally {
+    await f.app.close();
+  }
+});
+
+test('greetings and app explanations need no provider and recheck household membership', async () => {
+  const f = fixture({ configured: false });
+  try {
+    for (const message of [
+      'Hello!',
+      'What are you?',
+      'How does HouseMate work?',
+    ]) {
+      const response = await f.ask({ message });
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.json().kind, 'answer');
+      assert.match(response.json().text, /HouseMate/);
+    }
+    assert.ok(
+      !f.calls.some(
+        (call) =>
+          call.startsWith('provider:') ||
+          call.startsWith('budget:') ||
+          call.startsWith('dashboard:'),
+      ),
+    );
+    assert.equal((await f.ask({ message: 'Hello' }, foreign)).statusCode, 404);
+  } finally {
+    await f.app.close();
+  }
+  const revoked = fixture({ configured: false, revoke: true });
+  try {
+    assert.equal((await revoked.ask({ message: 'Hello' })).statusCode, 404);
+  } finally {
+    await revoked.app.close();
+  }
+});
+
+test('general Gemini answers do not read or send household records', async () => {
+  const f = fixture({
+    intent: {
+      topic: 'general',
+      memberName: null,
+      scope: null,
+      reply: 'Rinse the rice, then follow the package cooking instructions.',
+    },
+  });
+  try {
+    const result = await f.ask({ message: 'How do I cook rice?' });
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.json().topic, 'general');
+    assert.match(result.json().text, /Rinse the rice/);
+    assert.deepEqual(result.json().sources, []);
+    assert.ok(
+      !f.calls.some(
+        (call) =>
+          call.startsWith('dashboard:') || call.startsWith('announcements:'),
+      ),
+    );
+    assert.equal(
+      f.calls.filter((call) => call.startsWith('provider:')).length,
+      1,
+    );
+  } finally {
+    await f.app.close();
+  }
+});
+
+test('announcements use caller-scoped reads, skip expired notices and link their full content', async () => {
+  const records = [
+    {
+      id: 'notice',
+      title: 'Inspection',
+      body: 'Please keep the hall clear.',
+      priority: 'important',
+      expired: false,
+      canAcknowledge: true,
+      publishedAt: '2026-10-01T00:00:00Z',
+    },
+    { id: 'expired', title: 'Old private notice', expired: true },
+  ] as Announcement[];
+  const f = fixture({ configured: false, announcements: records });
+  try {
+    const result = await f.ask({ message: 'What annuncements are there?' });
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.json().topic, 'announcements');
+    assert.equal(result.json().rows.length, 1);
+    assert.match(result.json().rows[0].detail, /hall clear/);
+    assert.match(result.json().rows[0].href, /announcement=notice/);
+    assert.ok(f.calls.includes(`announcements:user:${id}:all:50:0`));
+    assert.ok(!f.calls.some((call) => call.startsWith('provider:')));
+    assert.equal(
+      (await f.ask({ topic: 'announcements' }, foreign)).statusCode,
+      404,
+    );
+  } finally {
+    await f.app.close();
+  }
+});
+
+test('weather is unavailable without an external request or city prompt', async () => {
+  const f = fixture({ configured: false });
+  try {
+    for (const message of [
+      "How's the weather?",
+      'Weather in Bangkok',
+      'Forecast tomorrow',
+    ]) {
+      const response = await f.ask({ message });
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.json().kind, 'clarification');
+      assert.equal(response.json().topic, 'unsupported');
+      assert.match(response.json().text, /don’t check weather/);
+      assert.ok(!response.json().text.includes('Which city'));
+    }
+    assert.ok(f.calls.every((call) => call.startsWith('access:')));
+  } finally {
+    await f.app.close();
+  }
+});
+
+test('Gemini generates a bounded structured general answer with no household context', async () => {
+  const provider = new GeminiAssistantProvider('test-only-token', (async (
+    _url,
+    init,
+  ) => {
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.generationConfig.maxOutputTokens, 800);
+    assert.ok(
+      !body.generationConfig.responseJsonSchema.properties.topic.enum.includes(
+        'weather',
+      ),
+    );
+    assert.equal(body.contents.length, 1);
+    assert.equal(body.tools, undefined);
+    assert.ok(!JSON.stringify(body).includes(household.name));
+    return geminiResponse(
+      JSON.stringify({
+        topic: 'general',
+        scope: null,
+        reply: 'Use a covered container for leftovers.',
+      }),
+    );
+  }) as typeof fetch);
+  const result = await provider.classify('How can I store leftovers?');
+  assert.equal(result.topic, 'general');
+  assert.equal(result.reply, 'Use a covered container for leftovers.');
+});
+
+test('Board and Catch me up use authorized records and omit obsolete household tools', async () => {
+  const notices = [
+    {
+      id: 'important',
+      title: 'Inspection',
+      body: 'Please clear the hall.',
+      priority: 'important',
+      expired: false,
+      canAcknowledge: true,
+      publishedAt: '2026-10-01T00:00:00Z',
+    },
+    {
+      id: 'normal',
+      title: 'Welcome',
+      body: 'Welcome home.',
+      priority: 'normal',
+      expired: false,
+      publishedAt: '2026-10-01T00:00:00Z',
+    },
+    {
+      id: 'expired',
+      title: 'Old notice',
+      body: 'Past',
+      priority: 'urgent',
+      expired: true,
+      publishedAt: '2026-10-01T00:00:00Z',
+    },
+  ] as Announcement[];
+  const f = fixture({ configured: false, announcements: notices });
+  try {
+    const board = await f.ask({ topic: 'board' });
+    assert.equal(board.statusCode, 200);
+    assert.deepEqual(
+      board.json().rows.map((row: { label: string }) => row.label),
+      ['Inspection', 'Welcome', 'BBQ'],
+    );
+    assert.ok(
+      board
+        .json()
+        .sources.every((source: { href: string }) =>
+          source.href.includes(`household=${id}`),
+        ),
+    );
+    const summary = await f.ask({ message: 'Catch me up' });
+    assert.deepEqual(
+      summary.json().rows.map((row: { label: string }) => row.label),
+      ['Inspection', 'BBQ', 'Electricity'],
+    );
+    assert.ok(
+      summary
+        .json()
+        .rows.every(
+          (row: { href: string }) => !/(chores|shopping|meals)/.test(row.href),
+        ),
+    );
+    assert.equal(summary.json().partial, true);
+    assert.ok(
+      !f.calls.some(
+        (call) => call.startsWith('provider:') || call.startsWith('budget:'),
+      ),
+    );
+    assert.equal((await f.ask({ topic: 'board' }, foreign)).statusCode, 404);
+  } finally {
+    await f.app.close();
+  }
+  const revoked = fixture({ configured: false, revoke: true });
+  try {
+    assert.equal((await revoked.ask({ topic: 'board' })).statusCode, 404);
+  } finally {
+    await revoked.app.close();
+  }
+});
+
+test('short clarification replies use allowlisted context and fresh authorized reads', async () => {
+  const f = fixture({ configured: false });
+  try {
+    const clarify = await f.ask({ message: 'What is due?' });
+    assert.equal(clarify.json().kind, 'clarification');
+    assert.deepEqual(
+      clarify.json().choices.map((choice: { topic: string }) => choice.topic),
+      ['board', 'balance', 'bills'],
+    );
+    const board = await f.ask({ message: 'Board' });
+    assert.equal(board.json().topic, 'board');
+    const today = await f.ask({
+      message: 'What about today?',
+      context: { topic: 'events' },
+    });
+    assert.equal(today.json().topic, 'events');
+    assert.equal(today.json().rows.length, 0);
+    assert.match(today.json().text, /2026-10-01/);
+    assert.equal(
+      (
+        await f.ask({
+          message: 'Today',
+          context: { topic: 'events', householdId: foreign },
+        })
+      ).statusCode,
+      400,
+    );
+    assert.equal(
+      (await f.ask({ message: 'Today', context: { topic: 'delete' } }))
+        .statusCode,
+      400,
+    );
+    assert.equal(
+      (await f.ask({ message: 'Today', context: { topic: 'events' } }, foreign))
+        .statusCode,
+      404,
+    );
+    assert.ok(
+      !f.calls.some(
+        (call) => call.startsWith('provider:') || call.startsWith('budget:'),
+      ),
+    );
+  } finally {
+    await f.app.close();
+  }
+});
+
+test('a context topic cannot supply private conversation data to Gemini', async () => {
+  const f = fixture({
+    intent: {
+      topic: 'general',
+      memberName: null,
+      scope: null,
+      reply: 'Keep dry rice in a sealed container.',
+    },
+  });
+  try {
+    const result = await f.ask({
+      message: 'How should I store rice?',
+      context: { topic: 'balance' },
+    });
+    assert.equal(result.json().topic, 'general');
+    assert.deepEqual(
+      f.calls.filter((call) => call.startsWith('provider:')),
+      ['provider:How should I store rice?'],
+    );
+    assert.ok(!f.calls.some((call) => call.startsWith('dashboard:')));
   } finally {
     await f.app.close();
   }

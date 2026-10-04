@@ -56,6 +56,7 @@ export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
         chores: new PgChoreRepository(pool),
         meals: new PgMealRepository(pool),
         events: new PgEventRepository(pool),
+        announcements: new PgAnnouncementRepository(pool),
       },
       config.assistant
         ? new GeminiAssistantProvider(config.assistant.apiKey)

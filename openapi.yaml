@@ -76,6 +76,7 @@ paths:
                 required: [naturalLanguageEnabled, actionDraftsEnabled, provider, requiresPrivacyAcknowledgement]
                 properties:
                   naturalLanguageEnabled: { type: boolean }
+                  chatEnabled: { type: boolean, description: "Local greetings, app explanations and Board/Money questions are available without Gemini" }
                   actionDraftsEnabled: { type: boolean, description: Local drafts are independent of Gemini configuration; supportedDraftKinds identifies available action kinds }
                   supportedDraftKinds: { type: array, items: { type: string, enum: [meal, announcement, shopping, chore, expense, bill] } }
                   provider: { type: [string, 'null'], enum: [gemini, null] }
@@ -123,7 +124,7 @@ paths:
   /v1/households/{id}/assistant/questions:
     post:
       summary: Answer a read-only household question from authorized API services
-      description: Choose a quick topic OR send a general question (1–1000 characters). Gemini free-tier classification requires server-only configuration and privacyAcknowledged true. The member acknowledges Google's unpaid-tier data use and that the question contains no personal/confidential information. The API rejects recognized active member names/emails, digits, links and credential markers before provider use; this guard is not a comprehensive personal-data detector. Named member questions belong in Money. Recognized action commands receive local clarification without provider use. Only the general question is sent; no household records, member lists, financial results or conversation history are sent or saved by HouseMate. The model only classifies intent; the API generates answers and amounts. No household records are mutated. Durable limits are 20 attempts per account per UTC hour and 200 globally per UTC day. Upstream limits fail without retry or paid fallback. Private answers are never cached. Bounded lists disclose truncation. Bills report provider status, not individual member payments.
+      description: Choose a quick topic OR send a general question (1–1000 characters). Gemini free-tier interpretation/general replies require server-only configuration and privacyAcknowledged true. The member acknowledges Google's unpaid-tier data use and that the question contains no personal/confidential information. The API rejects recognized active member names/emails, digits, links and credential markers before provider use; this guard is not a comprehensive personal-data detector. Named member questions belong in Money. Recognized action commands receive local clarification without provider use. Only the general question is sent; no household records, member lists, financial results or conversation history are sent or saved by HouseMate. Local greetings/app explanations and announcement reads work without Gemini. Gemini classifies household questions and generates concise general-information answers without household data or conversation history. Weather is not supported. Catch me up includes important active announcements, upcoming events and bills due within seven days. Board combines active announcements and upcoming events. An optional context contains only the previous household topic for allowlisted short follow-ups; it never supplies authorization or goes to Gemini. Clarifications may offer up to three read-only topic choices. Financial answers and household records remain API-generated. General answers are model-generated, not verified current information. No household records are mutated. Durable limits are 20 attempts per account per UTC hour and 200 globally per UTC day. Upstream limits fail without retry or paid fallback. Private answers are never cached. Bounded lists disclose truncation. Bills report provider status, not individual member payments.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
       requestBody:
@@ -134,15 +135,23 @@ paths:
               type: object
               additionalProperties: false
               properties:
-                topic: { type: string, enum: [summary, balance, bills, meals, chores, shopping, events] }
+                topic: { type: string, enum: [summary, balance, bills, meals, chores, shopping, events, announcements, board] }
                 message: { type: string, minLength: 1, maxLength: 1000 }
+                context:
+                  propertyNames: { enum: [topic] }
+                  type: object
+                  additionalProperties: false
+                  required: [topic]
+                  properties:
+                    topic: { type: string, enum: [summary, board, balance, bills, announcements, events] }
+                  description: Optional preceding topic for local short follow-ups only; never contains prompts, answers or household selectors
                 privacyAcknowledged: { type: boolean, const: true, description: Required before any free-text question is sent to Gemini }
               oneOf:
                 - { required: [topic], not: { required: [message] } }
                 - { required: [message], not: { required: [topic] } }
       responses:
         '200':
-          description: API-generated answer or clarification with authorized source links
+          description: Authorized household answer, local greeting/app help, bounded general Gemini answer, or clarification with optional read-only topic choices and same-app source links.
           content:
             application/json:
               schema:
@@ -150,7 +159,16 @@ paths:
                 required: [kind, topic, text, generatedAt, timezone, rows, sources, partial]
                 properties:
                   kind: { type: string, enum: [answer, clarification] }
-                  topic: { type: string, enum: [summary, balance, bills, meals, chores, shopping, events, unsupported] }
+                  topic: { type: string, enum: [summary, balance, bills, meals, chores, shopping, events, announcements, board, greeting, about, general, unsupported] }
+                  choices:
+                    type: array
+                    maxItems: 3
+                    items:
+                      type: object
+                      required: [label, topic]
+                      properties:
+                        label: { type: string }
+                        topic: { type: string, enum: [summary, board, balance, bills, announcements, events] }
                   text: { type: string }
                   generatedAt: { type: string, format: date-time }
                   timezone: { type: string }
