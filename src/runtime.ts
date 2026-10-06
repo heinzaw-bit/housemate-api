@@ -18,6 +18,8 @@ import { PgHouseActionRepository } from './house-actions.js';
 import { PgHouseholdRepository } from './households.js';
 import { PgMealRepository } from './meals.js';
 import { PgMoneyRepository } from './money.js';
+import { registerImmediateDispatch } from './notification-dispatch.js';
+import { notificationHealth } from './notification-health.js';
 import {
   createNotificationRunner,
   registerNotificationJob,
@@ -25,10 +27,17 @@ import {
 import { createPushSender, NotificationWorker } from './notification-worker.js';
 import { PgNotificationRepository, type PushConfig } from './notifications.js';
 import { PgPollRepository } from './polls.js';
+import { PushTestService } from './push-test.js';
 import { PgSearchRepository } from './search.js';
 import { PgShoppingRepository } from './shopping.js';
 
-export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
+export function createRuntime(
+  config: Config,
+  fastifyFactory?: typeof Fastify,
+  schedule: (task: Promise<unknown>) => void = (task) => {
+    void task;
+  },
+) {
   initializeErrorReporting();
   const pool = new pg.Pool(databasePoolOptions(config));
   const pushConfig: PushConfig = {
@@ -36,11 +45,8 @@ export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
     publicKey: config.vapid?.publicKey ?? null,
     reason: config.vapid ? null : 'server_setup',
   };
-  const worker = new NotificationWorker(
-    pool,
-    config.vapid ? createPushSender(config.vapid) : null,
-    pushConfig.publicKey,
-  );
+  const sender = config.vapid ? createPushSender(config.vapid) : null;
+  const worker = new NotificationWorker(pool, sender, pushConfig.publicKey);
   const app = createApp({
     fastifyFactory,
     auth: createSupabaseAuthVerifier(
@@ -77,6 +83,7 @@ export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
     polls: new PgPollRepository(pool),
     notifications: new PgNotificationRepository(pool, pushConfig),
     pushConfig,
+    pushTests: new PushTestService(pool, sender, pushConfig.publicKey),
     webOrigins: config.webOrigins,
     reportError,
     readiness: async () => {
@@ -86,11 +93,17 @@ export function createRuntime(config: Config, fastifyFactory?: typeof Fastify) {
   });
 
   const runner = createNotificationRunner(() => worker.tick());
+  registerImmediateDispatch(app, () => runner.run(true), schedule, reportError);
   registerNotificationJob(
     app,
     config.cronSecret,
     () => runner.run(),
     reportError,
+    async () => {
+      const health = await notificationHealth(pool);
+      app.log.info({ delivery: health }, 'Notification delivery health');
+      return health;
+    },
   );
   app.addHook('onClose', async () => {
     await runner.drain();

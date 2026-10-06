@@ -1,4 +1,9 @@
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {PushTestService} from '../dist/push-test.js';
+import {notificationHealth} from '../dist/notification-health.js';
+import {loadConfig} from '../dist/config.js';
+import {databasePoolOptions} from '../dist/database.js';
 import {createECDH,randomBytes,randomUUID} from 'node:crypto';
 import pg from 'pg';
 import webpush from 'web-push';
@@ -7,10 +12,11 @@ import {PgPollRepository} from '../dist/polls.js';
 import {PgNotificationRepository,defaultNotificationPreferences} from '../dist/notifications.js';
 import {NotificationWorker} from '../dist/notification-worker.js';
 
-const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1});
+const pool=new pg.Pool({...databasePoolOptions(loadConfig()),max:1});
 const c=await pool.connect();const code=expected=>error=>error.code===expected;
 try {
   await c.query('BEGIN');
+  await c.query(await readFile(new URL('../sql/017_notification_delivery.sql',import.meta.url),'utf8'));
   const users=(await c.query('SELECT id,auth_user_id FROM housemate.users ORDER BY created_at LIMIT 2')).rows;
   assert.equal(users.length,2);
   let queued=Promise.resolve();
@@ -73,6 +79,15 @@ try {
   const subscription={endpoint:`https://fcm.googleapis.com/fcm/send/housemate-test-${randomUUID()}`,keys:{p256dh:ecdh.getPublicKey().toString('base64url'),auth:randomBytes(16).toString('base64url')}};
   const device=await repo.subscribe(auth[0],subscription);
   assert.equal((await repo.subscribe(auth[0],subscription)).id,device.id);
+  const testSends=[];
+  const tests=new PushTestService(fixturePool,async (...args)=>{testSends.push(args);},vapid.publicKey);
+  await assert.rejects(tests.send(auth[1],hh,device.id),code('NOT_FOUND'));
+  assert.equal((await tests.send(auth[0],hh,device.id)).status,'accepted');
+  assert.equal(testSends.length,1);
+  assert.equal(JSON.parse(testSends[0][1]).test,true);
+  await assert.rejects(tests.send(auth[0],hh,device.id),code('TEST_COOLDOWN'));
+  assert.equal(testSends.length,1,'Cooldown persists and does not send twice.');
+  assert.equal((await repo.devices(auth[0])).find(d=>d.id===device.id).lastTestStatus,'accepted');
   await assert.rejects(repo.subscribe(auth[1],subscription),code('DEVICE_ACCOUNT_CONFLICT'));
   await assert.rejects(repo.unsubscribe(auth[1],device.id),code('NOT_FOUND'));
   assert.equal((await repo.devices(auth[1])).some(item=>item.id===device.id),false);
@@ -107,6 +122,7 @@ try {
   assert.equal((await c.query('SELECT status FROM housemate.push_deliveries d JOIN housemate.notifications n ON n.id=d.notification_id WHERE n.entity_id=$1 AND d.subscription_id=$2',[invalidPost.id,device.id])).rows[0].status,'invalid');
   await c.query("UPDATE housemate.household_members SET status='removed' WHERE id=$1",[members[0]]);
   await assert.rejects(repo.list(auth[0],hh,'all',20),code('NOT_FOUND'));
+  const health=await notificationHealth(fixturePool);assert.equal(typeof health.oldestDueSeconds,'number');
   const rls=(await c.query("SELECT relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='housemate' AND c.relname=ANY($1::text[])",[['notifications','notification_preferences','push_subscriptions','push_deliveries']])).rows;
   assert.equal(rls.length,4);assert.ok(rls.every(row=>row.relrowsecurity));
   console.log('Notification transactions, targeted privacy, cursor precision, read state, preferences, reminders, device ownership, quiet deferral, invalid-subscription removal, and RLS passed; fixture rolled back. Push transport was simulated.');

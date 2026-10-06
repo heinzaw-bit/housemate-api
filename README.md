@@ -165,3 +165,9 @@ sanitized execution metadata. The `uptime:alert-start`, `uptime:alert-recover`,
 `uptime:alert-status` and `uptime:alert-cleanup` commands exercise owner failure
 and recovery alerts through a temporary job without interrupting production.
 Provider configuration and scheduled outcomes do not prove email receipt.
+
+## Timely notifications
+
+Record saves immediately wake the durable queue using Vercel background tasks; the minute scheduler remains recovery/reminder generation. Apply additive `sql/017_notification_delivery.sql` before releasing this API: build, then run `node --env-file=.env.vercel scripts/apply-notification-delivery-migration.mjs` using ignored production configuration. Existing RLS and subscriptions remain.
+
+The documented owned-device test endpoint requires active membership, has a persistent one-minute cooldown, bypasses quiet hours only for an explicit test, and never automatically retries. Acceptance is not phone receipt. Private `/internal/notifications/health` returns aggregate timing without draining. Scheduled runs return 503 for overdue queues/repeated failures, using current owner-email alerts plus sanitized Sentry reporting. See OPERATIONS.md.

@@ -58,12 +58,15 @@
     "backup:offsite-drill": "npm run build && node scripts/offsite-backup.mjs drill",
     "smoke:search": "npm run build && node --env-file=.env scripts/smoke-search.mjs",
     "migrate:action-create": "npm run build && node --env-file=.env scripts/apply-action-create-migration.mjs",
-    "smoke:assistant-create": "npm run build && node --env-file=.env scripts/smoke-assistant-create.mjs"
+    "smoke:assistant-create": "npm run build && node --env-file=.env scripts/smoke-assistant-create.mjs",
+    "notifications:health": "node scripts/notification-health.mjs",
+    "migrate:notification-delivery": "npm run build && node --env-file=.env scripts/apply-notification-delivery-migration.mjs"
   },
   "type": "module",
   "dependencies": {
     "@fastify/cors": "11.3.0",
     "@sentry/node": "11.1.0",
+    "@vercel/functions": "3.9.11",
     "fastify": "5.12.5",
     "pg": "8.23.0",
     "web-push": "3.6.7"

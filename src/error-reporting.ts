@@ -40,6 +40,7 @@ export function sanitizeErrorEvent(
     'api.request',
     'api.readiness',
     'api.notifications',
+    'api.notifications.delivery',
     'api.database',
     'api.startup',
     'verification',

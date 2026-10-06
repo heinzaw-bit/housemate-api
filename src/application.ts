@@ -35,6 +35,7 @@ import type { MoneyRepository, SettlementDraft } from './money-types.js';
 import { registerNotificationRoutes } from './notification-routes.js';
 import type { NotificationRepository, PushConfig } from './notifications.js';
 import type { PollRepository } from './polls.js';
+import type { PushTestService } from './push-test.js';
 import type { SearchRepository } from './search.js';
 import { registerSearchRoutes } from './search-routes.js';
 import type { ShoppingDraft, ShoppingRepository } from './shopping.js';
@@ -65,6 +66,7 @@ interface AppDependencies {
   polls?: PollRepository;
   notifications?: NotificationRepository;
   pushConfig?: PushConfig;
+  pushTests?: PushTestService;
   webOrigins?: string[];
   readiness?: () => Promise<void>;
   reportError?: (error: unknown, operation: string) => Promise<void>;
@@ -213,6 +215,7 @@ export function createApp({
   announcements,
   polls,
   notifications,
+  pushTests,
   pushConfig = { enabled: false, publicKey: null, reason: 'server_setup' },
   webOrigins = ['http://localhost:3000'],
   readiness,
@@ -234,6 +237,7 @@ export function createApp({
     (request) => requireUser(request, auth),
     notifications,
     pushConfig,
+    pushTests,
   );
   registerAssistantRoutes(
     app,

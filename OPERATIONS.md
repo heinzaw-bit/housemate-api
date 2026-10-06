@@ -355,3 +355,11 @@ References: [Supabase backups](https://supabase.com/docs/guides/platform/backups
 [PostgreSQL binaries](https://www.enterprisedb.com/download-postgresql-binaries),
 [Sentry setup](https://docs.sentry.io/platforms/javascript/guides/nextjs/manual-setup/),
 [scheduler API](https://docs.cron-job.org/rest-api.html).
+
+## Notification delay diagnostics
+
+Scheduled runs now verify aggregate delivery health after draining. Due age >=3 minutes or recent terminal/repeated failures return 503, activating current first-failure/recovery emails. Sanitized Sentry reports use `api.notifications.delivery`, with no record/device IDs, private content or endpoints. GET-only `/internal/notifications/health` uses the private scheduler credential and does not run the worker. Logs show creation/queue-to-acceptance seconds; quiet/retry delays contribute to these latency metrics and acceptance is not device receipt.
+
+`npm run smoke:notifications` rolls back isolated database fixtures and uses simulated transport. On real Android Chrome and iPhone Home Screen, test open and closed/locked delivery, record send/banner time, exact tap targets, denied permission, quiet deferral and reconnect. Restore the ignored `.env.scheduler` key and REMINDER_API_ORIGIN if the supplemental local check cannot authenticate; cloud scheduling is independent.
+
+Use `npm run notifications:health` for sanitized read-only production delivery diagnostics. It reads ignored API production configuration, prints aggregate counters only, and never invokes the worker.

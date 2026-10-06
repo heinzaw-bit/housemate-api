@@ -16,16 +16,29 @@ export type PushSender = (
   subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
   payload: string,
   ttl: number,
+  urgency?: 'normal' | 'high',
 ) => Promise<void>;
 export function createPushSender(config: VapidConfig): PushSender {
-  return async (subscription, payload, ttl) => {
+  return async (subscription, payload, ttl, urgency = 'normal') => {
     await webpush.sendNotification(subscription, payload, {
       vapidDetails: config,
       TTL: ttl,
+      urgency,
       timeout: 10_000,
       topic: (JSON.parse(payload) as { id: string }).id.replace(/-/g, ''),
     });
   };
+}
+export function pushUrgency(
+  priority: string,
+  kind: string,
+  expires: Date,
+  now = Date.now(),
+): 'normal' | 'high' {
+  return priority === 'urgent' ||
+    (kind === 'reminder' && expires.getTime() - now <= 30 * 60_000)
+    ? 'high'
+    : 'normal';
 }
 export function isQuietTime(time: string, start: string, end: string): boolean {
   return start < end
@@ -80,6 +93,8 @@ interface DeliveryContext {
   allowed: boolean;
   quiet: boolean;
   resume_at: Date;
+  priority: string;
+  kind: string;
 }
 export class NotificationWorker {
   private running = false;
@@ -89,6 +104,7 @@ export class NotificationWorker {
     private readonly publicKey: string | null,
   ) {}
   async tick(): Promise<void> {
+    const deadline = Date.now() + 20_000;
     if (this.running) return;
     this.running = true;
     try {
@@ -106,25 +122,29 @@ export class NotificationWorker {
         ON CONFLICT DO NOTHING`,
         [this.publicKey],
       );
-      const claimed = await this.pool.query<Delivery>(
-        `WITH ready AS (
+      for (
+        let processed = 0;
+        processed < 200 && Date.now() < deadline - 10_000;
+        processed += 4
+      ) {
+        const claimed = await this.pool.query<Delivery>(
+          `WITH ready AS (
         SELECT notification_id,subscription_id FROM housemate.push_deliveries WHERE (status='pending' AND available_at<=now())
-          OR (status='processing' AND leased_until<now()) ORDER BY available_at LIMIT 20 FOR UPDATE SKIP LOCKED)
-        UPDATE housemate.push_deliveries d SET status='processing',lease_id=$1,leased_until=now()+interval '2 minutes',attempts=d.attempts+1
+          OR (status='processing' AND leased_until<now()) ORDER BY available_at LIMIT 4 FOR UPDATE SKIP LOCKED)
+        UPDATE housemate.push_deliveries d SET status='processing',lease_id=$1,leased_until=now()+interval '2 minutes',attempts=d.attempts+1,last_attempt_at=now()
         FROM ready WHERE d.notification_id=ready.notification_id AND d.subscription_id=ready.subscription_id RETURNING d.*`,
-        [randomUUID()],
-      );
-      for (let start = 0; start < claimed.rows.length; start += 4)
-        await Promise.all(
-          claimed.rows.slice(start, start + 4).map((job) => this.deliver(job)),
+          [randomUUID()],
         );
+        if (!claimed.rows.length) break;
+        await Promise.all(claimed.rows.map((job) => this.deliver(job)));
+      }
     } finally {
       this.running = false;
     }
   }
   private async deliver(job: Delivery): Promise<void> {
     const context = await this.pool.query<DeliveryContext>(
-      `SELECT n.household_id,n.entity_type,n.entity_id,n.expires_at,s.endpoint,s.p256dh,s.auth,
+      `SELECT n.household_id,n.entity_type,n.entity_id,n.expires_at,n.priority,n.kind,s.endpoint,s.p256dh,s.auth,
       s.enabled AND s.vapid_public_key=$3 AND m.status='active' AND h.archived_at IS NULL AND n.created_at>=m.joined_at AND n.created_at>=s.enabled_at
         AND n.read_at IS NULL AND n.expires_at>now() AND COALESCE((p.categories->n.category->>'webPush')::boolean,n.category<>'shopping') AND (${actionable}) AS allowed,
       COALESCE(p.quiet_enabled,false) AND CASE WHEN p.quiet_start<p.quiet_end THEN (now() AT TIME ZONE h.timezone)::time>=p.quiet_start AND (now() AT TIME ZONE h.timezone)::time<p.quiet_end
@@ -170,6 +190,7 @@ export class NotificationWorker {
           notificationHref(row.household_id, row.entity_type, row.entity_id),
         ),
         ttl,
+        pushUrgency(row.priority, row.kind, row.expires_at),
       );
       await this.finish(job, 'sent');
       await this.pool.query(

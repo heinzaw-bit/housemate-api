@@ -63,6 +63,9 @@ export interface PushDevice {
   createdAt: string;
   lastSentAt: string | null;
   lastError: string | null;
+  lastTestAt?: string | null;
+  lastTestStatus?: string | null;
+  lastTestAcceptedAt?: string | null;
 }
 export interface PushConfig {
   enabled: boolean;
@@ -235,6 +238,9 @@ function mapDevice(row: {
   created_at: Date;
   last_sent_at: Date | null;
   last_error: string | null;
+  last_test_at?: Date | null;
+  last_test_status?: string | null;
+  last_test_accepted_at?: Date | null;
 }): PushDevice {
   return {
     id: row.id,
@@ -242,6 +248,9 @@ function mapDevice(row: {
     createdAt: row.created_at.toISOString(),
     lastSentAt: row.last_sent_at?.toISOString() ?? null,
     lastError: row.last_error,
+    lastTestAt: row.last_test_at?.toISOString() ?? null,
+    lastTestStatus: row.last_test_status ?? null,
+    lastTestAcceptedAt: row.last_test_accepted_at?.toISOString() ?? null,
   };
 }
 
@@ -440,7 +449,7 @@ export class PgNotificationRepository implements NotificationRepository {
     const userId = await this.userId(user);
     return (
       await this.pool.query(
-        'SELECT id,enabled,created_at,last_sent_at,last_error FROM housemate.push_subscriptions WHERE user_id=$1 ORDER BY created_at DESC',
+        'SELECT id,enabled,created_at,last_sent_at,last_error,last_test_at,last_test_status,last_test_accepted_at FROM housemate.push_subscriptions WHERE user_id=$1 ORDER BY created_at DESC',
         [userId],
       )
     ).rows.map(mapDevice);

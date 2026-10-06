@@ -6,6 +6,7 @@ import {
   type PushConfig,
   type PushRegistration,
 } from './notifications.js';
+import type { PushTestService } from './push-test.js';
 import type { AuthenticatedUser } from './types.js';
 
 export function registerNotificationRoutes(
@@ -13,6 +14,7 @@ export function registerNotificationRoutes(
   authenticate: (request: FastifyRequest) => Promise<AuthenticatedUser>,
   repo: NotificationRepository | undefined,
   push: PushConfig,
+  tests?: PushTestService,
 ) {
   if (!repo) return;
   const householdParams = {
@@ -153,6 +155,34 @@ export function registerNotificationRoutes(
         );
     },
   );
+  if (tests)
+    app.post<{ Params: { id: string; subscriptionId: string } }>(
+      '/v1/households/:id/push-subscriptions/:subscriptionId/test',
+      {
+        schema: {
+          params: {
+            type: 'object',
+            required: ['id', 'subscriptionId'],
+            properties: {
+              id: { type: 'string', format: 'uuid' },
+              subscriptionId: { type: 'string', format: 'uuid' },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const user = await authenticate(request);
+        return reply
+          .header('Cache-Control', 'no-store')
+          .send(
+            await tests.send(
+              user.id,
+              request.params.id,
+              request.params.subscriptionId,
+            ),
+          );
+      },
+    );
   app.get('/v1/push-config', async (request, reply) => {
     await authenticate(request);
     return reply.header('Cache-Control', 'no-store').send(push);

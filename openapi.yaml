@@ -357,6 +357,49 @@ paths:
         '204': { description: Device disabled }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /v1/households/{id}/push-subscriptions/{subscriptionId}/test:
+    post:
+      summary: Send one immediate test to a caller-owned enabled device
+      description: Requires active household membership and device ownership. Explicit test bypasses category and quiet-hour preferences, contains no household content, and is limited to once per device per minute across instances. No automatic retry. Accepted means push-service acceptance, not phone receipt.
+      parameters:
+        - $ref: '#/components/parameters/HouseholdId'
+        - { in: path, name: subscriptionId, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Push service accepted the test
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, acceptedAt]
+                properties:
+                  status: { type: string, enum: [accepted] }
+                  acceptedAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { description: Wait a minute before testing this device again }
+        '503': { description: Push unavailable or delivery attempt failed; no private provider details }
+  /internal/notifications/health:
+    get:
+      summary: Read sanitized notification delivery health without invoking the worker
+      security: []
+      description: Requires the server-only scheduler Bearer secret; a member JWT is rejected. Returns aggregate timings and counts only. Due queues older than three minutes or recent terminal failures are unhealthy. Quiet-hour and retry deferrals are excluded from the due-age check. Creation/queue-to-acceptance timings include intentional delays; historical pre-migration queue timing is approximate. Acceptance does not establish phone receipt.
+      responses:
+        '200':
+          description: Healthy aggregate delivery state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationDeliveryHealth' }
+        '401': { description: Invalid scheduler credentials }
+        '503':
+          description: Unhealthy delivery state or database unavailable
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/NotificationDeliveryHealth' }
+                  - { type: object, properties: { error: { type: object, properties: { code: { type: string }, message: { type: string } } } } }
   /v1/households/{id}/announcements:
     get:
       summary: List announcements visible to the caller
@@ -2273,6 +2316,22 @@ components:
           properties:
             p256dh: { type: string, minLength: 80, maxLength: 100 }
             auth: { type: string, minLength: 20, maxLength: 30 }
+    NotificationDeliveryHealth:
+      type: object
+      required: [status, delivery]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        delivery:
+          type: object
+          required: [pending, oldestDueSeconds, recentFailures, acceptedLast15Minutes, maxCreationToAcceptanceSeconds, maxQueueToAcceptanceSeconds, healthy]
+          properties:
+            pending: { type: integer, minimum: 0 }
+            oldestDueSeconds: { type: integer, minimum: 0 }
+            recentFailures: { type: integer, minimum: 0 }
+            acceptedLast15Minutes: { type: integer, minimum: 0 }
+            maxCreationToAcceptanceSeconds: { type: integer, minimum: 0 }
+            maxQueueToAcceptanceSeconds: { type: integer, minimum: 0 }
+            healthy: { type: boolean }
     PushDevice:
       type: object
       required: [id, enabled, createdAt, lastSentAt, lastError]
@@ -2282,6 +2341,9 @@ components:
         createdAt: { type: string, format: date-time }
         lastSentAt: { type: [string, 'null'], format: date-time }
         lastError: { type: [string, 'null'], description: Sanitized status code only, never endpoint or provider response body. }
+        lastTestAt: { type: [string, 'null'], format: date-time }
+        lastTestStatus: { type: [string, 'null'], enum: [sending, accepted, failed, invalid, null] }
+        lastTestAcceptedAt: { type: [string, 'null'], format: date-time }
     AnnouncementDraft:
       type: object
       additionalProperties: false
