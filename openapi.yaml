@@ -384,7 +384,7 @@ paths:
     get:
       summary: Read sanitized notification delivery health without invoking the worker
       security: []
-      description: Requires the server-only scheduler Bearer secret; a member JWT is rejected. Returns aggregate timings and counts only. Due queues older than three minutes or recent terminal failures are unhealthy. Quiet-hour and retry deferrals are excluded from the due-age check. Creation/queue-to-acceptance timings include intentional delays; historical pre-migration queue timing is approximate. Acceptance does not establish phone receipt.
+      description: Requires the server-only scheduler Bearer secret; a member JWT is rejected. Returns aggregate timings and counts only. Due queues older than three minutes or recent terminal delivery failures are unhealthy. Handled subscription expiry (404/410) disables the device and does not degrade service health. Quiet-hour and retry deferrals are excluded from the due-age check. Creation/queue-to-acceptance timings include intentional delays; historical pre-migration queue timing is approximate. Acceptance does not establish phone receipt.
       responses:
         '200':
           description: Healthy aggregate delivery state
@@ -2327,7 +2327,7 @@ components:
           properties:
             pending: { type: integer, minimum: 0 }
             oldestDueSeconds: { type: integer, minimum: 0 }
-            recentFailures: { type: integer, minimum: 0 }
+            recentFailures: { type: integer, minimum: 0, description: "Terminal delivery failures or repeated transient failures within 15 minutes; excludes handled expired subscriptions (404/410)." }
             acceptedLast15Minutes: { type: integer, minimum: 0 }
             maxCreationToAcceptanceSeconds: { type: integer, minimum: 0 }
             maxQueueToAcceptanceSeconds: { type: integer, minimum: 0 }
