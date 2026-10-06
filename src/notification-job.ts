@@ -2,7 +2,9 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { DeliveryHealth } from './notification-health.js';
 
-export function createNotificationRunner(tick: () => Promise<void>) {
+export function createNotificationRunner(
+  tick: (budgetMs?: number) => Promise<void>,
+) {
   let pending: Promise<void> | null = null;
   let requested = false;
   return {
@@ -12,13 +14,14 @@ export function createNotificationRunner(tick: () => Promise<void>) {
         return false;
       }
       pending = Promise.resolve().then(async () => {
+        const deadline = Date.now() + 20_000;
         requested = false;
-        await tick();
+        await tick(20_000);
         // A save committed after the queue snapshot needs another pass.
         // Bound follow-ups; the durable scheduler handles any continuing traffic.
-        if (requested) {
+        if (requested && Date.now() < deadline - 10_000) {
           requested = false;
-          await tick();
+          await tick(deadline - Date.now());
         }
       });
       try {

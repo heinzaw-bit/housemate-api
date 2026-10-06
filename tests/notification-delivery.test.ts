@@ -158,3 +158,26 @@ test('read-only private health cannot invoke worker; degraded scheduled health r
   assert.equal(reports, 1);
   await app.close();
 });
+
+test('follow-up passes share one budget and skip when less than a provider timeout remains', async (context) => {
+  let now = 1000;
+  context.mock.method(Date, 'now', () => now);
+  const budgets: number[] = [];
+  const runner = createNotificationRunner(async (budget) => {
+    budgets.push(budget ?? 0);
+    if (budgets.length === 1) {
+      now += 6000;
+      await runner.run(true);
+    }
+  });
+  await runner.run();
+  assert.deepEqual(budgets, [20000, 14000]);
+  let passes = 0;
+  const slow = createNotificationRunner(async () => {
+    passes++;
+    now += 11000;
+    await slow.run(true);
+  });
+  await slow.run();
+  assert.equal(passes, 1);
+});

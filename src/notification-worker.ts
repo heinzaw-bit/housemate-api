@@ -103,8 +103,8 @@ export class NotificationWorker {
     private readonly sender: PushSender | null,
     private readonly publicKey: string | null,
   ) {}
-  async tick(): Promise<void> {
-    const deadline = Date.now() + 20_000;
+  async tick(budgetMs = 20_000): Promise<void> {
+    const deadline = Date.now() + Math.min(20_000, budgetMs);
     if (this.running) return;
     this.running = true;
     try {

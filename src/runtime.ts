@@ -92,7 +92,7 @@ export function createRuntime(
     },
   });
 
-  const runner = createNotificationRunner(() => worker.tick());
+  const runner = createNotificationRunner((budget) => worker.tick(budget));
   registerImmediateDispatch(app, () => runner.run(true), schedule, reportError);
   registerNotificationJob(
     app,
