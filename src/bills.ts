@@ -16,7 +16,6 @@ import {
   editRequestHash,
   priorEdit,
   recordEdit,
-  requireEditPermission,
   requireEditPreview,
   requireRevision,
 } from './financial-edits.js';
@@ -33,6 +32,19 @@ interface Access {
   currency: Bill['currency'];
   user_id: string;
   role: 'owner' | 'admin' | 'member';
+}
+
+function canManageBills(role: Access['role']) {
+  return role === 'owner' || role === 'admin';
+}
+
+function requireBillManager(access: Access) {
+  if (!canManageBills(access.role))
+    throw new ApiError(
+      403,
+      'FORBIDDEN',
+      'Only a household owner or admin can change a saved bill.',
+    );
 }
 
 interface BillRow {
@@ -57,7 +69,6 @@ interface BillRow {
   created_by_display_name: string;
   created_at: Date;
   status_updated_at: Date;
-  created_by_user_id: string;
   revision: number;
   updated_at: Date;
   voided_at: Date | null;
@@ -70,7 +81,7 @@ const columns = `b.id, b.household_id, b.title, b.bill_type, b.provider, b.amoun
   b.payer_member_id, payer_user.display_name AS payer_display_name,
   b.payment_status, b.shared_participant_ids, b.adjustments, b.base_minor,
   b.charge_minor, b.credit_minor, creator.display_name AS created_by_display_name,
-  b.created_at, b.status_updated_at, b.created_by_user_id, b.revision, b.updated_at,
+  b.created_at, b.status_updated_at, b.revision, b.updated_at,
   b.voided_at, voider.display_name AS voided_by_display_name, b.void_reason`;
 const joins = `JOIN housemate.household_members payer ON payer.id = b.payer_member_id
   JOIN housemate.users payer_user ON payer_user.id = payer.user_id
@@ -92,7 +103,7 @@ export class PgBillRepository implements BillRepository {
        JOIN housemate.household_members m ON m.household_id = h.id AND m.status = 'active'
        JOIN housemate.users u ON u.id = m.user_id
        WHERE h.id = $1 AND u.auth_user_id = $2 AND h.archived_at IS NULL
-       ${lock ? 'FOR UPDATE OF h' : ''}`,
+       ${lock ? 'FOR UPDATE OF h FOR SHARE OF m' : ''}`,
       [householdId, authUserId],
     );
     if (!result.rows[0])
@@ -197,16 +208,8 @@ export class PgBillRepository implements BillRepository {
       statusUpdatedAt: row.status_updated_at.toISOString(),
       revision: row.revision,
       updatedAt: row.updated_at.toISOString(),
-      canEdit:
-        row.voided_at === null &&
-        (row.created_by_user_id === access.user_id ||
-          access.role === 'owner' ||
-          access.role === 'admin'),
-      canVoid:
-        row.voided_at === null &&
-        (row.created_by_user_id === access.user_id ||
-          access.role === 'owner' ||
-          access.role === 'admin'),
+      canEdit: row.voided_at === null && canManageBills(access.role),
+      canVoid: row.voided_at === null && canManageBills(access.role),
       voidedAt: row.voided_at?.toISOString() ?? null,
       voidedByDisplayName: row.voided_by_display_name,
       voidReason: row.void_reason,
@@ -388,6 +391,7 @@ export class PgBillRepository implements BillRepository {
     try {
       await client.query('BEGIN');
       const access = await this.access(client, authUserId, householdId, true);
+      requireBillManager(access);
       const current = await client.query<{
         payment_status: BillPaymentStatus;
         voided_at: Date | null;
@@ -434,6 +438,7 @@ export class PgBillRepository implements BillRepository {
     expectedRevision: number,
   ): Promise<BillEditPreview> {
     const access = await this.access(this.pool, authUserId, householdId);
+    requireBillManager(access);
     const current = await this.read(this.pool, householdId, billId, access);
     if (!current) throw new ApiError(404, 'NOT_FOUND', 'Bill not found.');
     if (current.voidedAt)
@@ -442,8 +447,6 @@ export class PgBillRepository implements BillRepository {
         'ALREADY_VOIDED',
         'This bill was voided and cannot be edited.',
       );
-    if (!current.canEdit)
-      requireEditPermission(access.user_id, access.role, 'another user');
     requireRevision(current.revision, expectedRevision);
     if (draft.currency !== access.currency)
       throw new ApiError(
@@ -487,6 +490,7 @@ export class PgBillRepository implements BillRepository {
     try {
       await client.query('BEGIN');
       const access = await this.access(client, authUserId, householdId, true);
+      requireBillManager(access);
       const canonical = canonicalBill(draft);
       const requestHash = editRequestHash(canonical, expectedRevision);
       const prior = await priorEdit<Bill>(
@@ -504,11 +508,10 @@ export class PgBillRepository implements BillRepository {
       }
       const lock = await client.query<{
         revision: number;
-        created_by_user_id: string;
         payment_status: BillPaymentStatus;
         voided_at: Date | null;
       }>(
-        `SELECT revision, created_by_user_id, payment_status, voided_at FROM housemate.bills
+        `SELECT revision, payment_status, voided_at FROM housemate.bills
          WHERE id = $1 AND household_id = $2 FOR UPDATE`,
         [billId, householdId],
       );
@@ -520,11 +523,6 @@ export class PgBillRepository implements BillRepository {
           'ALREADY_VOIDED',
           'This bill was voided and cannot be edited.',
         );
-      requireEditPermission(
-        access.user_id,
-        access.role,
-        row.created_by_user_id,
-      );
       requireRevision(row.revision, expectedRevision);
       if (canonical.currency !== access.currency)
         throw new ApiError(
@@ -628,6 +626,7 @@ export class PgBillRepository implements BillRepository {
     reason?: string,
   ) {
     const access = await this.access(this.pool, authUserId, householdId);
+    requireBillManager(access);
     const current = await this.read(this.pool, householdId, billId, access);
     if (!current) throw new ApiError(404, 'NOT_FOUND', 'Bill not found.');
     if (current.voidedAt)
@@ -635,12 +634,6 @@ export class PgBillRepository implements BillRepository {
         409,
         'ALREADY_VOIDED',
         'This bill was already voided.',
-      );
-    if (!current.canVoid)
-      throw new ApiError(
-        403,
-        'FORBIDDEN',
-        'Only the creator or a household owner or admin can void this bill.',
       );
     requireRevision(current.revision, expectedRevision, 'void');
     const cleaned = cleanVoidReason(reason);
@@ -681,6 +674,7 @@ export class PgBillRepository implements BillRepository {
     try {
       await client.query('BEGIN');
       const access = await this.access(client, authUserId, householdId, true);
+      requireBillManager(access);
       const cleaned = cleanVoidReason(reason);
       const requestHash = voidRequestHash(expectedRevision, cleaned);
       const prior = await priorEdit<Bill>(
@@ -698,10 +692,9 @@ export class PgBillRepository implements BillRepository {
       }
       const lock = await client.query<{
         revision: number;
-        created_by_user_id: string;
         voided_at: Date | null;
       }>(
-        `SELECT revision, created_by_user_id, voided_at FROM housemate.bills
+        `SELECT revision, voided_at FROM housemate.bills
          WHERE id = $1 AND household_id = $2 FOR UPDATE`,
         [billId, householdId],
       );
@@ -713,12 +706,6 @@ export class PgBillRepository implements BillRepository {
           'ALREADY_VOIDED',
           'This bill was already voided.',
         );
-      requireEditPermission(
-        access.user_id,
-        access.role,
-        row.created_by_user_id,
-        'void',
-      );
       requireRevision(row.revision, expectedRevision, 'void');
       await requireEditPreview(
         client,

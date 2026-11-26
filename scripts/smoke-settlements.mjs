@@ -59,11 +59,23 @@ try {
   assert.deepEqual(before.members.map((member) => member.netMinor).sort((a, b) => a - b), [-50, 50]);
   assert.equal(before.pendingBillCount, 1);
   assert.equal(before.pendingBillAmountMinor, 200);
+  assert.deepEqual(before.members.map((member) => member.pendingBillShareMinor), [100, 100]);
+  assert.deepEqual(before.members.map((member) => member.expectedNetMinor).sort((a, b) => a - b), [-150, 150]);
+  const otherViewer = await money.balances(bobAuth, householdId);
+  assert.deepEqual(otherViewer.members, before.members, 'Every member sees the same pending allocations');
   assert.equal((await money.entries(bobAuth, householdId, memberIds[1], 50, 0)).length, 1);
   await bills.setStatus(aliceAuth, householdId, bill.id, 'paid');
   const paid = await money.balances(bobAuth, householdId);
   assert.deepEqual(paid.members.map((member) => member.netMinor).sort((a, b) => a - b), [-150, 150]);
   assert.equal(paid.pendingBillCount, 0);
+  assert.ok(paid.members.every((member) => member.pendingBillShareMinor === 0));
+  assert.deepEqual(paid.members.map((member) => member.expectedNetMinor), before.members.map((member) => member.expectedNetMinor), 'Paid confirms the same expected amounts without double counting');
+  await bills.setStatus(aliceAuth, householdId, bill.id, 'unpaid');
+  const unpaidAgain = await money.balances(bobAuth, householdId);
+  assert.deepEqual(unpaidAgain.members.map((member) => member.netMinor).sort((a, b) => a - b), [-50, 50]);
+  assert.deepEqual(unpaidAgain.members.map((member) => member.pendingBillShareMinor), [100, 100]);
+  assert.deepEqual(unpaidAgain.members.map((member) => member.expectedNetMinor), before.members.map((member) => member.expectedNetMinor));
+  await bills.setStatus(aliceAuth, householdId, bill.id, 'paid');
   assert.equal((await money.entries(bobAuth, householdId, memberIds[1], 50, 0)).length, 2);
   const draft = {
     senderMemberId: memberIds[1], recipientMemberId: memberIds[0],
@@ -72,13 +84,17 @@ try {
   };
   await assert.rejects(money.previewSettlement(randomUUID(), householdId, draft),
     (error) => error.code === 'NOT_FOUND');
-  const preview = await money.previewSettlement(bobAuth, householdId, draft);
+  await assert.rejects(money.previewSettlement(bobAuth, householdId, draft),
+    (error) => error.code === 'FORBIDDEN');
+  const preview = await money.previewSettlement(aliceAuth, householdId, draft);
   assert.equal(preview.recommendedAmountMinor, 150);
   assert.equal(preview.senderAfterMinor, -75);
   assert.equal(preview.receiverAfterMinor, 75);
   const key = randomUUID();
-  const first = await money.createSettlement(bobAuth, householdId, draft, key);
-  const retry = await money.createSettlement(bobAuth, householdId, draft, key);
+  await assert.rejects(money.createSettlement(bobAuth, householdId, draft, key),
+    (error) => error.code === 'FORBIDDEN');
+  const first = await money.createSettlement(aliceAuth, householdId, draft, key);
+  const retry = await money.createSettlement(aliceAuth, householdId, draft, key);
   assert.equal(first.id, retry.id);
   assert.equal(first.recordedByDisplayName.length > 0, true);
   assert.equal((await money.listSettlements(aliceAuth, householdId, 50, 0)).length, 1);
@@ -88,7 +104,28 @@ try {
   const bobEntries = await money.entries(bobAuth, householdId, memberIds[1], 50, 0);
   assert.equal(bobEntries.find((entry) => entry.sourceType === 'settlement')?.effectMinor, 75);
   assert.equal(bobEntries.reduce((sum, entry) => sum + entry.effectMinor, 0), -75);
-  await assert.rejects(money.createSettlement(bobAuth, householdId, { ...draft, amountMinor: 76 }, key),
+  const planned = await bills.create(aliceAuth, householdId, {
+    title: 'Planned payer outside the split', billType: 'internet', provider: 'Utility',
+    amountMinor: 901, currency: 'THB', periodStart: '2026-08-01', periodEnd: '2026-08-31',
+    dueDate: '2026-09-30', payerMemberId: memberIds[0], paymentStatus: 'unpaid',
+    sharedParticipantIds: [memberIds[1]], adjustments: [],
+  }, randomUUID());
+  const plannedBalances = await money.balances(bobAuth, householdId);
+  const plannedPayer = plannedBalances.members.find((member) => member.memberId === memberIds[0]);
+  const contributor = plannedBalances.members.find((member) => member.memberId === memberIds[1]);
+  assert.equal(plannedPayer.pendingBillShareMinor, 0);
+  assert.equal(plannedPayer.expectedNetMinor, 976, 'Credit the full bill to its planned payer even when they have no own share');
+  assert.equal(contributor.expectedNetMinor, -976);
+  assert.equal(plannedBalances.members.reduce((sum, member) => sum + member.expectedNetMinor, 0), 0);
+  await bills.setStatus(aliceAuth, householdId, planned.id, 'paid');
+  const confirmedPlanned = await money.balances(bobAuth, householdId);
+  assert.deepEqual(confirmedPlanned.members.map((member) => member.expectedNetMinor), plannedBalances.members.map((member) => member.expectedNetMinor));
+  const unpaidPlanned = await bills.setStatus(aliceAuth, householdId, planned.id, 'unpaid');
+  const removal = await bills.previewVoid(aliceAuth, householdId, planned.id, unpaidPlanned.revision, 'Rollback-only preview check');
+  assert.deepEqual(removal.balanceEffects, []);
+  assert.deepEqual(removal.expectedBalanceEffects.map((effect) => effect.beforeMinor).sort((a, b) => a - b), [-976, 976]);
+  assert.deepEqual(removal.expectedBalanceEffects.map((effect) => effect.afterMinor).sort((a, b) => a - b), [-75, 75]);
+  await assert.rejects(money.createSettlement(aliceAuth, householdId, { ...draft, amountMinor: 76 }, key),
     (error) => error.code === 'IDEMPOTENCY_CONFLICT');
   console.log('Balances, pending/paid bills, ledger entries, suggestions, transfer preview, confirmation, and retry passed. Rolling back test data.');
 } finally {

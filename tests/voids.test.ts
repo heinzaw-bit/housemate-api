@@ -227,5 +227,28 @@ test('void preview calculates exact member and pending effects', () => {
   assert.deepEqual(unpaid.balanceEffects, []);
   assert.equal(unpaid.pendingBillCountAfter, 0);
   assert.equal(unpaid.pendingBillAmountMinorAfter, 0);
+  const combined = calculateVoidEffect(
+    record,
+    {
+      ...summary,
+      members: summary.members.map((member) => ({
+        ...member,
+        expectedNetMinor: member.netMinor * 2,
+      })),
+    },
+    1,
+    null,
+    false,
+    true,
+  );
+  assert.deepEqual(combined.balanceEffects, []);
+  assert.deepEqual(
+    combined.expectedBalanceEffects?.map((effect) => effect.beforeMinor),
+    [100, -100],
+  );
+  assert.deepEqual(
+    combined.expectedBalanceEffects?.map((effect) => effect.afterMinor),
+    [50, -50],
+  );
   assert.equal(cleanVoidReason(' Duplicate '), 'Duplicate');
 });

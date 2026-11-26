@@ -446,20 +446,26 @@ export class HouseholdAssistant {
           else {
             const subject =
               intent.memberName === null ? 'You' : member.displayName;
+            const amount = member.expectedNetMinor ?? member.netMinor;
+            const includesUnpaid =
+              member.expectedNetMinor !== undefined &&
+              snapshot.balance.pendingBillCount > 0;
             const state =
               intent.memberName === null
-                ? balanceText(member.netMinor)
-                : member.netMinor < 0
-                  ? `owes ${money(-member.netMinor)}`
-                  : member.netMinor > 0
-                    ? `is owed ${money(member.netMinor)}`
+                ? balanceText(amount)
+                : amount < 0
+                  ? `owes ${money(-amount)}`
+                  : amount > 0
+                    ? `is owed ${money(amount)}`
                     : 'is settled up';
-            answer.text = `${subject} ${state}. This balance uses confirmed household records. Unpaid provider bills are excluded. Recorded settlements describe transfers made outside HouseMate.`;
+            answer.text = includesUnpaid
+              ? `${subject} ${state}. This balance includes unpaid bills using each bill’s planned payer.`
+              : `${subject} ${state}. This balance uses confirmed household records. Unpaid provider bills are excluded. Recorded settlements describe transfers made outside HouseMate.`;
             answer.rows = [
               {
                 ...pages.balance,
                 label: member.displayName,
-                detail: `Net balance: ${money(member.netMinor)}`,
+                detail: `${includesUnpaid ? 'Balance including unpaid bills' : 'Net balance'}: ${money(amount)}`,
               },
             ];
           }

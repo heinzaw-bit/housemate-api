@@ -7,6 +7,8 @@ export interface MemberBalance {
   netMinor: number;
   owesMinor: number;
   owedMinor: number;
+  expectedNetMinor?: number;
+  pendingBillShareMinor?: number;
 }
 
 export interface SettlementSuggestion {
