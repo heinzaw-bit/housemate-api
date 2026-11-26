@@ -14,7 +14,7 @@ import type {
   SettlementDraft,
   SettlementPreview,
 } from './money-types.js';
-import type { Currency } from './types.js';
+import type { Currency, HouseholdRole } from './types.js';
 
 type Db = Pool | PoolClient;
 
@@ -22,6 +22,7 @@ interface Access {
   currency: Currency;
   user_id: string;
   member_id: string;
+  role: HouseholdRole;
 }
 
 interface BalanceRow {
@@ -29,6 +30,8 @@ interface BalanceRow {
   display_name: string;
   status: MemberBalance['status'];
   net_minor: string;
+  expected_net_minor: string;
+  pending_bill_share_minor: string;
 }
 
 interface EntryRow {
@@ -104,12 +107,12 @@ export class PgMoneyRepository implements MoneyRepository {
     lock = false,
   ): Promise<Access> {
     const result = await db.query<Access>(
-      `SELECT h.default_currency AS currency, u.id AS user_id, m.id AS member_id
+      `SELECT h.default_currency AS currency, u.id AS user_id, m.id AS member_id, m.role
        FROM housemate.households h
        JOIN housemate.household_members m ON m.household_id = h.id AND m.status = 'active'
        JOIN housemate.users u ON u.id = m.user_id
        WHERE h.id = $1 AND u.auth_user_id = $2 AND h.archived_at IS NULL
-       ${lock ? 'FOR UPDATE OF h' : ''}`,
+       ${lock ? 'FOR UPDATE OF h FOR SHARE OF m' : ''}`,
       [householdId, authUserId],
     );
     const row = result.rows[0];
@@ -146,14 +149,32 @@ export class PgMoneyRepository implements MoneyRepository {
          UNION ALL
          SELECT s.recipient_member_id AS member_id, -s.amount_minor AS delta
          FROM housemate.settlements s WHERE s.household_id = $1
+       ), pending_bill_shares AS (
+         SELECT bs.member_id, SUM(bs.amount_minor) AS pending_minor
+         FROM housemate.bill_shares bs
+         JOIN housemate.bills b ON b.id = bs.bill_id
+         WHERE b.household_id = $1 AND b.payment_status = 'unpaid'
+           AND b.voided_at IS NULL
+         GROUP BY bs.member_id
+       ), planned_bill_payments AS (
+         SELECT b.payer_member_id AS member_id, SUM(b.amount_minor) AS planned_minor
+         FROM housemate.bills b
+         WHERE b.household_id = $1 AND b.payment_status = 'unpaid'
+           AND b.voided_at IS NULL
+         GROUP BY b.payer_member_id
        )
        SELECT m.id AS member_id, u.display_name, m.status,
-         COALESCE(SUM(d.delta), 0)::text AS net_minor
+         COALESCE(SUM(d.delta), 0)::text AS net_minor,
+         (COALESCE(SUM(d.delta), 0) + COALESCE(planned.planned_minor, 0)
+           - COALESCE(pending.pending_minor, 0))::text AS expected_net_minor,
+         COALESCE(pending.pending_minor, 0)::text AS pending_bill_share_minor
        FROM housemate.household_members m
        JOIN housemate.users u ON u.id = m.user_id
        LEFT JOIN deltas d ON d.member_id = m.id
+       LEFT JOIN pending_bill_shares pending ON pending.member_id = m.id
+       LEFT JOIN planned_bill_payments planned ON planned.member_id = m.id
        WHERE m.household_id = $1 AND m.status <> 'invited'
-       GROUP BY m.id, u.display_name, m.status
+       GROUP BY m.id, u.display_name, m.status, pending.pending_minor, planned.planned_minor
        ORDER BY u.display_name, m.id`,
       [householdId],
     );
@@ -166,6 +187,11 @@ export class PgMoneyRepository implements MoneyRepository {
         netMinor,
         owesMinor: Math.max(-netMinor, 0),
         owedMinor: Math.max(netMinor, 0),
+        expectedNetMinor:
+          row.expected_net_minor === undefined
+            ? netMinor
+            : safeMinor(row.expected_net_minor),
+        pendingBillShareMinor: safeMinor(row.pending_bill_share_minor ?? '0'),
       };
     });
   }
@@ -278,16 +304,12 @@ export class PgMoneyRepository implements MoneyRepository {
     });
   }
 
-  private settlementPreview(
-    draft: SettlementDraft,
-    summary: BalanceSummary,
-    access: Access,
-  ): SettlementPreview {
-    if (draft.currency !== access.currency)
+  private checkSettlementDraftAccess(draft: SettlementDraft, access: Access) {
+    if (access.role !== 'owner')
       throw new ApiError(
-        400,
-        'CURRENCY_MISMATCH',
-        `This household uses ${access.currency}.`,
+        403,
+        'FORBIDDEN',
+        'Only the household owner can record transfers.',
       );
     if (
       draft.senderMemberId !== access.member_id &&
@@ -296,9 +318,14 @@ export class PgMoneyRepository implements MoneyRepository {
       throw new ApiError(
         403,
         'FORBIDDEN',
-        'Only the sender or recipient can record this transfer.',
+        'The owner can record transfers they sent or received.',
       );
-    return calculateSettlementPreview(draft, summary.members);
+    if (draft.currency !== access.currency)
+      throw new ApiError(
+        400,
+        'CURRENCY_MISMATCH',
+        `This household uses ${access.currency}.`,
+      );
   }
 
   async previewSettlement(
@@ -307,8 +334,9 @@ export class PgMoneyRepository implements MoneyRepository {
     draft: SettlementDraft,
   ): Promise<SettlementPreview> {
     const access = await this.access(this.pool, authUserId, householdId);
+    this.checkSettlementDraftAccess(draft, access);
     const summary = await this.balancesWithin(this.pool, householdId, access);
-    return this.settlementPreview(draft, summary, access);
+    return calculateSettlementPreview(draft, summary.members);
   }
 
   private async readSettlement(
@@ -334,21 +362,7 @@ export class PgMoneyRepository implements MoneyRepository {
     try {
       await client.query('BEGIN');
       const access = await this.access(client, authUserId, householdId, true);
-      if (draft.currency !== access.currency)
-        throw new ApiError(
-          400,
-          'CURRENCY_MISMATCH',
-          `This household uses ${access.currency}.`,
-        );
-      if (
-        draft.senderMemberId !== access.member_id &&
-        draft.recipientMemberId !== access.member_id
-      )
-        throw new ApiError(
-          403,
-          'FORBIDDEN',
-          'Only the sender or recipient can record this transfer.',
-        );
+      this.checkSettlementDraftAccess(draft, access);
       const canonical = {
         ...draft,
         method: draft.method?.trim() || undefined,
@@ -378,7 +392,7 @@ export class PgMoneyRepository implements MoneyRepository {
         return existing;
       }
       const summary = await this.balancesWithin(client, householdId, access);
-      const preview = this.settlementPreview(canonical, summary, access);
+      const preview = calculateSettlementPreview(canonical, summary.members);
       const result = await client.query<{ id: string }>(
         `INSERT INTO housemate.settlements
          (household_id, sender_member_id, recipient_member_id, amount_minor, currency,

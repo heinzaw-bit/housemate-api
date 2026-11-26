@@ -77,36 +77,58 @@ test('suggestions are informational and deterministically clear balanced debts',
   );
 });
 
-test('an active member outside a proposed transfer cannot preview it', async () => {
+test('transfer preview and recording require the owner to be a participant', async () => {
+  let actor = { memberId: bob, role: 'member' };
+  const query = async (sql: string) => {
+    if (sql === 'BEGIN' || sql === 'ROLLBACK') return { rows: [] };
+    if (sql.includes('FROM housemate.households h'))
+      return {
+        rows: [
+          {
+            currency: 'THB',
+            user_id: actor.memberId,
+            member_id: actor.memberId,
+            role: actor.role,
+          },
+        ],
+      };
+    if (sql.includes('WITH deltas AS'))
+      return {
+        rows: balances.map((member) => ({
+          member_id: member.memberId,
+          display_name: member.displayName,
+          status: member.status,
+          net_minor: String(member.netMinor),
+        })),
+      };
+    if (sql.includes('pending_count'))
+      return { rows: [{ pending_count: '0', pending_minor: '0' }] };
+    throw new Error('Unexpected SQL');
+  };
   const fakePool = {
-    query: async (sql: string) => {
-      if (sql.includes('FROM housemate.households h'))
-        return {
-          rows: [{ currency: 'THB', user_id: alice, member_id: alice }],
-        };
-      if (sql.includes('WITH deltas AS'))
-        return {
-          rows: balances.map((member) => ({
-            member_id: member.memberId,
-            display_name: member.displayName,
-            status: member.status,
-            net_minor: String(member.netMinor),
-          })),
-        };
-      if (sql.includes('pending_count'))
-        return { rows: [{ pending_count: '0', pending_minor: '0' }] };
-      throw new Error('Unexpected SQL');
-    },
+    query,
+    connect: async () => ({ query, release: () => {} }),
   } as unknown as Pool;
   const repository = new PgMoneyRepository(fakePool);
-  await assert.rejects(
-    repository.previewSettlement(alice, home, {
-      ...draft,
-      senderMemberId: bob,
-      recipientMemberId: carol,
-    }),
-    (error: unknown) =>
-      error instanceof Error && 'code' in error && error.code === 'FORBIDDEN',
+  for (const denied of [
+    { memberId: bob, role: 'member' },
+    { memberId: bob, role: 'admin' },
+    { memberId: carol, role: 'owner' },
+  ]) {
+    actor = denied;
+    await assert.rejects(
+      repository.previewSettlement(actor.memberId, home, draft),
+      { statusCode: 403, code: 'FORBIDDEN' },
+    );
+    await assert.rejects(
+      repository.createSettlement(actor.memberId, home, draft, home),
+      { statusCode: 403, code: 'FORBIDDEN' },
+    );
+  }
+  actor = { memberId: alice, role: 'owner' };
+  assert.equal(
+    (await repository.previewSettlement(alice, home, draft)).recipientMemberId,
+    alice,
   );
 });
 

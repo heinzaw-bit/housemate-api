@@ -19,6 +19,7 @@ export interface VoidPreview {
   expectedRevision: number;
   reason: string | null;
   balanceEffects: VoidBalanceEffect[];
+  expectedBalanceEffects?: VoidBalanceEffect[];
   pendingBillCountBefore: number;
   pendingBillCountAfter: number;
   pendingBillAmountMinorBefore: number;
@@ -62,7 +63,7 @@ export function calculateVoidEffect(
   pendingBill: boolean,
 ): Omit<VoidPreview, 'previewId' | 'expiresAt'> {
   const changes = new Map<string, number>();
-  if (includedInBalances) {
+  if (includedInBalances || pendingBill) {
     changes.set(record.payerMemberId, -record.amountMinor);
     for (const share of record.shares)
       changes.set(
@@ -72,7 +73,9 @@ export function calculateVoidEffect(
   }
   const balanceEffects = summary.members
     .map((member) => {
-      const changeMinor = changes.get(member.memberId) ?? 0;
+      const changeMinor = includedInBalances
+        ? (changes.get(member.memberId) ?? 0)
+        : 0;
       const afterMinor = member.netMinor + changeMinor;
       if (!Number.isSafeInteger(afterMinor))
         throw new Error('Voided balance exceeds supported range');
@@ -85,6 +88,26 @@ export function calculateVoidEffect(
       };
     })
     .filter((effect) => effect.changeMinor !== 0);
+  const expectedBalanceEffects = summary.members.every(
+    (member) => member.expectedNetMinor !== undefined,
+  )
+    ? summary.members
+        .map((member) => {
+          const beforeMinor = member.expectedNetMinor ?? member.netMinor;
+          const changeMinor = changes.get(member.memberId) ?? 0;
+          const afterMinor = beforeMinor + changeMinor;
+          if (!Number.isSafeInteger(afterMinor))
+            throw new Error('Voided expected balance exceeds supported range');
+          return {
+            memberId: member.memberId,
+            displayName: member.displayName,
+            beforeMinor,
+            changeMinor,
+            afterMinor,
+          };
+        })
+        .filter((effect) => effect.changeMinor !== 0)
+    : undefined;
   return {
     recordId: record.id,
     title: record.title,
@@ -93,6 +116,7 @@ export function calculateVoidEffect(
     expectedRevision,
     reason,
     balanceEffects,
+    ...(expectedBalanceEffects === undefined ? {} : { expectedBalanceEffects }),
     pendingBillCountBefore: summary.pendingBillCount,
     pendingBillCountAfter: summary.pendingBillCount - (pendingBill ? 1 : 0),
     pendingBillAmountMinorBefore: summary.pendingBillAmountMinor,

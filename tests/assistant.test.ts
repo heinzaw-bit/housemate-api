@@ -230,6 +230,44 @@ function fixture(
   return { app, assistant, calls, ask, data };
 }
 
+test('assistant balance includes unpaid bills using the API-calculated expected amount', async () => {
+  const f = fixture();
+  const get = f.data.dashboard.get;
+  f.data.dashboard.get = async (user, selector) => {
+    const result = await get(user, selector);
+    return {
+      ...result,
+      balance: {
+        ...result.balance,
+        members: result.balance.members.map((member) => ({
+          ...member,
+          expectedNetMinor:
+            member.memberId === 'me'
+              ? -201
+              : member.memberId === 'alex1'
+                ? 201
+                : 0,
+        })),
+      },
+    };
+  };
+  try {
+    const result = await f.ask({ topic: 'balance' });
+    assert.equal(result.statusCode, 200);
+    assert.match(result.json().text, /^You owe THB.?2\.01/);
+    assert.match(
+      result.json().text,
+      /includes unpaid bills using each bill’s planned payer/,
+    );
+    assert.equal(
+      result.json().rows[0].detail,
+      'Balance including unpaid bills: -THB 2.01',
+    );
+  } finally {
+    await f.app.close();
+  }
+});
+
 test('assistant authorizes before spending, validates input, scopes membership and never caches', async () => {
   const f = fixture();
   try {

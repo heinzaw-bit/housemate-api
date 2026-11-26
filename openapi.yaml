@@ -1556,7 +1556,7 @@ paths:
   /v1/households/{id}/settlements/preview:
     post:
       summary: Preview a manual transfer and its balance effect without saving
-      description: Only an active sender or recipient may preview. The transfer occurred outside HouseMate and is not verified or processed here.
+      description: Only the active household owner may preview a transfer they sent or received. HouseMate records transfers that occurred outside the app.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
       requestBody:
@@ -1599,7 +1599,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
     post:
       summary: Record a manual transfer idempotently
-      description: Only the active sender or recipient may record it. A retry with the same UUID and draft returns the original record; a changed draft returns 409. HouseMate does not process or verify the transfer.
+      description: Only the active household owner may record a transfer they sent or received. A retry with the same UUID and draft returns the original record. A changed draft returns 409. HouseMate does not process or verify the transfer.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
       requestBody:
@@ -1712,7 +1712,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
       summary: Confirm a previously previewed bill edit
-      description: The creator or a household owner/admin may edit. Requires an unexpired API preview for the exact draft and current revision. Provider payment status remains controlled by the status endpoint. The API recalculates shares transactionally, records before/after snapshots, and supports idempotent retries.
+      description: Only an active household owner or admin may edit a saved bill, including on retry. Requires an unexpired API preview for the exact draft and current revision. Provider payment status remains controlled by the status endpoint. The API recalculates shares transactionally and records before/after snapshots.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
         - in: path
@@ -1737,6 +1737,7 @@ paths:
   /v1/households/{id}/bills/{billId}/edit-preview:
     post:
       summary: Preview a bill edit against the current revision
+      description: Only an active household owner or admin may preview changes to a saved bill.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
         - in: path
@@ -1760,7 +1761,7 @@ paths:
   /v1/households/{id}/bills/{billId}/status:
     patch:
       summary: Record whether the provider has been paid
-      description: Any active member may record a manual status change. Each change is audited. No payment is processed.
+      description: Only an active household owner or admin may change a saved bill's provider status. Each change is audited as a manual report.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
         - in: path
@@ -1783,11 +1784,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Bill' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /v1/households/{id}/bills/{billId}/void-preview:
     post:
       summary: Preview the balance effect of voiding a bill
-      description: A paid bill is removed from member balances. An unpaid bill is removed from pending totals. Existing settlements remain recorded.
+      description: Only an active household owner or admin may preview removal. Voiding removes the bill from expected balances, and also from confirmed balances for a Paid bill or pending totals for an Unpaid bill.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
         - in: path
@@ -1830,7 +1833,7 @@ paths:
   /v1/households/{id}/bills/{billId}/void:
     post:
       summary: Confirm a previously previewed bill void
-      description: The creator or a household owner/admin may void. The bill remains visible and immutable with actor, time, and optional reason. Confirmation is idempotent.
+      description: Only an active household owner or admin may void a saved bill, including on retry. The bill remains visible and immutable with actor, time, and optional reason. Confirmation is idempotent.
       parameters:
         - $ref: '#/components/parameters/HouseholdId'
         - in: path
@@ -2828,6 +2831,13 @@ components:
         netMinor: { type: integer, description: 'Positive means owed to this member; negative means they owe.' }
         owesMinor: { type: integer, minimum: 0 }
         owedMinor: { type: integer, minimum: 0 }
+        expectedNetMinor:
+          type: integer
+          description: 'Combined balance including Unpaid bills: netMinor plus full Unpaid bill totals credited to their planned payer, minus this member’s Unpaid shares. Positive means expected to receive; negative means expected to contribute. Marking a bill Paid leaves this combined amount unchanged. Omitted by older APIs; netMinor and settlement previews/suggestions continue to use confirmed records.'
+        pendingBillShareMinor:
+          type: integer
+          minimum: 0
+          description: 'This member’s allocated shares of non-voided Unpaid household bills, in the summary currency. Informational pending contributions, excluded from netMinor and settlement suggestions. Omitted by older API versions.'
     SettlementSuggestion:
       type: object
       required: [senderMemberId, senderDisplayName, recipientMemberId, recipientDisplayName, amountMinor]
@@ -3004,8 +3014,12 @@ components:
             statusUpdatedAt: { type: string, format: date-time }
             revision: { type: integer, minimum: 1 }
             updatedAt: { type: string, format: date-time }
-            canEdit: { type: boolean }
-            canVoid: { type: boolean }
+            canEdit:
+              type: boolean
+              description: True for an active household owner or admin when the bill has not been voided.
+            canVoid:
+              type: boolean
+              description: True for an active household owner or admin when the bill has not been voided.
             voidedAt: { type: [string, 'null'], format: date-time }
             voidedByDisplayName: { type: [string, 'null'] }
             voidReason: { type: [string, 'null'] }
@@ -3218,6 +3232,18 @@ components:
         reason: { type: [string, 'null'] }
         balanceEffects:
           type: array
+          items:
+            type: object
+            required: [memberId, displayName, beforeMinor, changeMinor, afterMinor]
+            properties:
+              memberId: { type: string, format: uuid }
+              displayName: { type: string }
+              beforeMinor: { type: integer }
+              changeMinor: { type: integer }
+              afterMinor: { type: integer }
+        expectedBalanceEffects:
+          type: array
+          description: 'Effect on combined displayed balances, including Unpaid bill planned-payer credits and shares. Omitted by older APIs; balanceEffects retains its confirmed-record basis.'
           items:
             type: object
             required: [memberId, displayName, beforeMinor, changeMinor, afterMinor]
