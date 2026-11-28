@@ -184,3 +184,11 @@ Provider configuration and scheduled outcomes do not prove email receipt.
 Record saves immediately wake the durable queue using Vercel background tasks; the minute scheduler remains recovery/reminder generation. Apply additive `sql/017_notification_delivery.sql` before releasing this API: build, then run `node --env-file=.env.vercel scripts/apply-notification-delivery-migration.mjs` using ignored production configuration. Existing RLS and subscriptions remain.
 
 The documented owned-device test endpoint requires active membership, has a persistent one-minute cooldown, bypasses quiet hours only for an explicit test, and never automatically retries. Acceptance is not phone receipt. Private `/internal/notifications/health` returns aggregate timing without draining. Scheduled runs return 503 for overdue queues/repeated failures, using current owner-email alerts plus sanitized Sentry reporting. See OPERATIONS.md.
+
+## Copyright and reuse
+
+All rights in original HouseMate material are reserved by the respective
+copyright holders. Reuse, modification, and redistribution require permission
+from the relevant copyright holder, subject to applicable law and GitHub's
+terms. Third-party code, fonts, and other materials are governed by their own
+licenses and attribution notices.
